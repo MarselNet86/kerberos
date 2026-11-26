@@ -1135,7 +1135,7 @@ def ask_overwrite(app: App, diff: str) -> bool:
     """§10.9: a KERBEROS template was edited in the panel: show how, ask before writing."""
     show_pager(app, t("tpl.diff.intro") + "\n\n" + app.mask(diff), t("s8.title"))
     body = Group(Notice("warning", t("tpl.diff.question")),
-                 Text(f"{t('quit.yes')}    {t('quit.no')}", style="muted"))  # fmt: skip
+                 Text(f"{t('tpl.diff.yes')}    {t('tpl.diff.no')}", style="muted"))  # fmt: skip
     app.draw(t("s8.title"), body)
     return app.term.read_key() == "enter"
 

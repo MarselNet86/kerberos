@@ -583,3 +583,51 @@ def test_finalization_leaves_only_the_domain_in_the_own_profile():
     names = reality_of(profile_of(panel, "nl-2"))["streamSettings"]["realitySettings"]
     assert names["serverNames"] == ["nl-2.example.com"]
     assert profile_of(panel, "nl-1") == shared
+
+
+# -- found on the stand: KERBEROS's own template is not a hand edit -----------------------------
+@pytest.mark.parametrize("kind", ["reserve", "single"])
+def test_a_template_kerberos_wrote_for_other_zones_is_its_own(kind):
+    from kerberos.fixes import subscription
+
+    assert subscription.own_write(kind, subscription.build(kind, []))
+    assert subscription.own_write(kind, subscription.build(kind, ["nl-1.example.net"]))
+    edited = subscription.build(kind, ["nl-1.example.net"])
+    edited["log"] = {"loglevel": "debug"}
+    assert not subscription.own_write(kind, edited)
+    assert not subscription.own_write(kind, {})
+
+
+def test_a_new_zone_brings_the_templates_up_to_date_without_a_question():
+    """The stand: the second node's domain in another zone made KERBEROS ask whether its own
+    templates of the first run were edited by hand, under the hints of the quit question."""
+    from kerberos.fixes import subscription
+
+    panel = build_panel()
+    old = {}
+    for kind, name in (("reserve", subscription.RESERVE_NAME),
+                       ("single", subscription.SINGLE_NAME)):  # fmt: skip
+        old[name] = subscription.build(kind, ["nl-1.example.net"])
+        panel.templates.append({"uuid": new_uuid(), "name": name, "templateType": "XRAY_JSON",
+                                "templateJson": copy.deepcopy(old[name])})  # fmt: skip
+    _app, term, code = steal(panel, "nl-1", "nl-1.example.com")
+    assert code == EXIT_OK
+    assert not seen(term, t("tpl.diff.question"))
+    for template in panel.templates:
+        if template["name"] in old:
+            assert template["templateJson"] != old[template["name"]], "brought up to date"
+            assert "domain:example.com" in json.dumps(template["templateJson"])
+
+
+def test_the_question_about_a_hand_edit_names_its_own_keys():
+    from kerberos.fixes import subscription
+
+    panel = build_panel()
+    edited = subscription.build("single", ["nl-1.example.net"])
+    edited["log"] = {"loglevel": "debug"}
+    panel.templates.append({"uuid": new_uuid(), "name": subscription.SINGLE_NAME,
+                            "templateType": "XRAY_JSON", "templateJson": edited})  # fmt: skip
+    keys = domain_row(panel, "nl-1", "d", *"nl-1.example.com", "enter") + ["enter", "enter"]
+    _app, term, _code = run_fix(keys + ["esc", "esc", "enter"], panel)
+    question = next(f for f in term.frames if t("tpl.diff.question") in f)
+    assert t("tpl.diff.yes") in question and t("quit.yes") not in question

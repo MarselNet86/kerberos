@@ -62,6 +62,29 @@ def build(kind: str, domains: Iterable[str]) -> dict:
     return filled
 
 
+def _strings(value) -> list:
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in _strings(v)]
+    if isinstance(value, list):
+        return [s for v in value for s in _strings(v)]
+    return [value] if isinstance(value, str) else []
+
+
+def own_write(kind: str, current) -> bool:
+    """The template in the panel is one KERBEROS wrote, for other zones of the fleet: a new
+    node domain changes only `domain:<zone>` (K24, found on the stand). Not a hand edit:
+    it is brought up to date without asking."""
+    if not isinstance(current, dict):
+        return False
+    base = set(_strings(build(kind, [])))
+    zones = [s[len("domain:"):] for s in dict.fromkeys(_strings(current))
+             if s.startswith("domain:") and s not in base]  # fmt: skip
+    try:
+        return build(kind, zones) == current
+    except ProfileError:
+        return False
+
+
 def pair_tags(node_name: str) -> dict:
     """Tags of a main and its reserve, one per protocol; panel format ^[A-Z0-9_:]+$, ≤ 32.
 
