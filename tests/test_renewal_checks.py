@@ -9,7 +9,7 @@ is so: a fleet without such trouble keeps its score, the demo's 38 → 77 includ
 import pytest
 from demo_input import demo_input
 from helpers import seen
-from test_xui_flow import STEAL_ROW, TO_PLAN, local_node, xui_app
+from test_xui_flow import TO_PLAN, TO_STEAL, local_node, xui_app
 
 from kerberos.agent import SITE_CONF
 from kerberos.checks import spec
@@ -111,7 +111,7 @@ def test_the_hook_blocks_self_steal(data):
 
 
 def test_plan_shows_why_self_steal_is_off():
-    keys = TO_PLAN + ["down"] * STEAL_ROW + ["esc", "q", "enter"]  # the row, its details, out
+    keys = TO_PLAN + TO_STEAL + ["esc", "q", "enter"]  # the row, its details, out
     app, term = xui_app(keys)
     local_node(app).state["facts"]["certbot"]["stopsNginx"] = True
     app.run("fix")

@@ -132,18 +132,20 @@ TEXT: dict[str, str] = {
     ),
     "help.close": "Любая клавиша: закрыть",
     "help.s6.check": (
-        "Пробел     чем грозит и подробности строки\n"
+        "Пробел     что внутри строки: проблемы области, чем грозит, подробности\n"
         "PgUp PgDn  листать по экрану, Home End: в начало и в конец\n"
         "f          исправить найденное: сразу к плану исправления\n"
         "Esc        назад, без новой проверки"
     ),
     "help.s6": (
-        "Пробел     чем грозит и подробности строки\n"
+        "Пробел     что внутри строки: проблемы области, чем грозит, подробности\n"
         "PgUp PgDn  листать по экрану, Home End: в начало и в конец\n"
         "Enter      к плану исправления\n"
         "Esc        назад, без новой проверки"
     ),
     "help.s7": (
+        "Пробел     отметить строку или всю группу\n"
+        "→ ←        открыть группу по нодам и свернуть её\n"
         "d          домен для строки «Свой домен»\n"
         "r          резервная нода для неё\n"
         "g          другой сайт-заглушка\n"
@@ -153,12 +155,16 @@ TEXT: dict[str, str] = {
         "a          отметить все, кроме порта SSH и портала; ещё раз: снять"
     ),
     "help.s7.xui": (
+        "Пробел     отметить строку или всю группу\n"
+        "→ ←        открыть группу и свернуть её\n"
         "d          домен для строки «Свой домен»\n"
         "g          другой сайт-заглушка\n"
         "a          отметить все, кроме порта SSH и панели; ещё раз: снять"
     ),
     "help.s9": (
-        "↑ ↓        листать список изменений\nPgUp PgDn  по экрану, Home End: в начало и в конец"
+        "↑ ↓        листать блоки\n"
+        "Пробел     что сделано в области, по нодам\n"
+        "PgUp PgDn  по экрану, Home End: в начало и в конец"
     ),
     "notice.info": "Инфо",
     "notice.warning": "Внимание",
@@ -578,7 +584,8 @@ TEXT: dict[str, str] = {
     "check.exit.ru_traffic.title": "Через ноду ходят российские сайты ({ruShare})",
     "check.exit.ru_traffic.threat": "Доля российских доменов в трафике ноды выше 1 %",
     "check.exit.ru_traffic.how": (
-        "хосты перейдут на шаблон подписки KERBEROS, и российские сайты пойдут напрямую"
+        "оставьте отмеченной «Подписку» в плане исправления: хосты перейдут на шаблон "
+        "KERBEROS, и российские сайты пойдут напрямую"
     ),
     "check.reserve.missing.title": "У ноды нет скрытого резерва",
     "check.reserve.missing.threat": (
@@ -611,21 +618,8 @@ TEXT: dict[str, str] = {
     "s5.whois.no": "Нет, без whois",
     "s5.failed": "Сбор данных остановился: {error}",
     "s6.title": "Отчёт проверки",
-    "s6.summary": (
-        "Найдено: {problems}, из них с высоким риском: {high}.\n"
-        "KERBEROS исправит сам: {auto} · вручную: {manual}"
-    ),
     "s6.after": " · после исправления: до {score}",
     "s6.fix_hint": "f — перейти к исправлению",
-    "s6.col.risk": "Риск",
-    "s6.col.where": "Где",
-    "s6.col.what": "Что не так",
-    "s6.col.todo": "Что делать",
-    "todo.fix": "✓ KERBEROS",
-    "todo.fix.short": "сам",
-    "todo.manual.short": "вручную",
-    "todo.explain.short": "пояснение",
-    "todo.plan.short": "в плане",
     "s6.none": "Проблем не найдено",
     "s6.details": "Пробел: подробности",
     "s6.end": "Enter: в меню",
@@ -852,26 +846,13 @@ TEXT: dict[str, str] = {
         "в панели хостера; KERBEROS вернул старый"
     ),
     "error.port_busy": "этот порт уже занят на ноде",
-    "s9.ssh_port": "Новый порт SSH на {node}: {port}",
-    "s9.login": "Входить теперь: {command}",
-    "s9.login.admin": "Входить теперь: {command} или kerberos ssh {node}",
     "report.ssh_port": "Новый порт SSH: {port}. Входить: {command}",
-    "plan.col.node": "Нода",
-    "plan.col.fix": "Исправление",
-    "plan.col.risk": "Важность",
-    "plan.col.note": "Заметка",
     "plan.blocked.no_admin_key": "нет ключа администратора: вход по паролю останется",
     "plan.blocked.bridge_network": "нода в сети Docker bridge: правило не сработает",
     "plan.has_warning": "внимание",
     "plan.details.blocked": "Недоступно: {reason}",
     "plan.details.warning": "Внимание: {text}",
-    "importance.high": "высокая",
-    "importance.medium": "средняя",
-    "importance.low": "низкая",
-    "importance.info": "по желанию",
     "plan.empty": "Автоматически исправлять нечего. Что сделать вручную, написано в отчёте.",
-    "plan.selected": "Отмечено: {n} из {total}",
-    "consent.intro": "Что изменится:",
     "consent.renewals": "{node}: продление сертификатов {names} перейдёт на nginx",
     "consent.keys": "Enter: разрешить · ↑↓: прокрутить · Esc: вернуться к плану",
     "s8.title": "Применение",
@@ -896,9 +877,6 @@ TEXT: dict[str, str] = {
     "s9.applied": "Применено: {ok} из {total}.",
     "s9.failed": "Не применилось: {n}.",
     "s9.rollback_failed": "Не откатилось: {n}, проверьте вручную.",
-    "s9.left": (
-        "Осталось: {problems}. Можно исправить следующим запуском: {auto}. Вручную: {manual}."
-    ),
     "state.planned": "в плане",
     "state.applying": "применялось",
     "state.applied": "применено",
@@ -1025,6 +1003,114 @@ TEXT: dict[str, str] = {
     "error.reserve_chain": "нода не может быть резервом и основой одновременно",
     "plan.reserve.is_reserve": "{node} уже резерв для {main}: у резерва не бывает своего резерва",
     "plan.blocked.panel_peer": "панель подключается к ноде не с того адреса, что KERBEROS",
+    # K23: blocks on S6, the plan, consent and S9; the same areas on all four
+    "area.domain": "Свой домен",
+    "area.access": "Вход на серверы",
+    "area.ssh_port": "Новый порт SSH",
+    "area.scanners": "Дыры для сканеров",
+    "area.panel_login": "Вход в панель",
+    "area.cdn": "Туннель за CDN",
+    "area.subscription": "Подписка",
+    "area.watch": "Наблюдение",
+    "area.other": "Другое",
+    "where.nodes": "{n:нода|ноды|нод}",
+    "where.more": "и ещё {n}",
+    "fix.access.admin_keys.short": "ваш ключ администратора на нодах",
+    "fix.ssh.key_only.short": "вход только по ключу",
+    "fix.fail2ban.sshd.short": "защита от перебора паролей",
+    "fix.hostkeys.regenerate.short": "новые ключи сервера",
+    "fix.ssh.port.short": "новый порт SSH",
+    "fix.mptcp.guard.short": "защита от уязвимости MPTCP",
+    "fix.node_api.panel_only.short": "API ноды только для панели",
+    "fix.ports.drop.short": "закрытие лишних портов",
+    "fix.panel.portal.short": "портал входа перед панелью",
+    "fix.xui.panel_hide.short": "новый порт и секретный путь панели",
+    "fix.cdn.edge_only.short": "туннель только через сети CDN",
+    "fix.xhttp.padding.short": "паддинг XHTTP",
+    "fix.xhttp.uplink_get.short": "загрузка через CDN методом GET",
+    "fix.sub.template.short": "шаблон подписки KERBEROS у хостов",
+    "fix.sub.templates.short": "шаблоны подписки KERBEROS в панели",
+    "fix.sub.ping_type.short": "пинг клиентов через туннель",
+    "fix.host.fingerprint.short": "маскировка клиента под браузер",
+    "fix.watch.install.short": "сборщик признаков блокировки",
+    "fix.self_steal.short": "свой домен",
+    "fix.self_steal.site.short": "сайт и сертификат",
+    "fix.node.letsencrypt_mount.short": "сертификат в контейнере ноды",
+    "fix.self_steal.profile.short": "профиль по шаблону KERBEROS",
+    "fix.self_steal.node.short": "новый инбаунд на ноде",
+    "fix.self_steal.squads.short": "новый инбаунд в сквадах",
+    "fix.self_steal.hosts.short": "копии хостов, старые выключены",
+    "fix.xui.reality.short": "Reality на своём домене",
+    "fix.reserve.short": "резервная пара",
+    "check.fleet.shared_hostkey.short": "один ключ сервера на нодах",
+    "check.reality.foreign_sni.short": "Reality прикрыт чужим сайтом",
+    "check.probe.no_sni.short": "чужой сертификат по IP",
+    "check.hy2.foreign_masquerade.short": "Hysteria2 прикрыт чужим сайтом",
+    "check.profile.template.short": "непроверенный конфиг",
+    "check.site.same_template.short": "одинаковые сайты-заглушки",
+    "check.ssh.password.short": "вход по паролю",
+    "check.ssh.port_default.short": "SSH на порту 22",
+    "check.ssh.fail2ban.short": "нет защиты от перебора",
+    "check.kernel.mptcp.short": "уязвимость MPTCP",
+    "check.node_api.public.short": "API ноды открыт всем",
+    "check.ports.public.short": "лишние порты",
+    "check.cdn.origin_direct.short": "туннель виден напрямую по IP",
+    "check.panel.public.short": "панель без барьера",
+    "check.xui.panel_exposed.short": "панель 3x-ui открыта всем",
+    "check.client.ping_type.short": "пинг напрямую до IP",
+    "check.xhttp.padding.short": "нет паддинга XHTTP",
+    "check.xhttp.uplink_get.short": "POST через CDN",
+    "check.host.fingerprint.short": "клиент не похож на браузер",
+    "check.sub.ru_direct.short": "российские сайты через VPN",
+    "check.sub.probe_interval.short": "частые проверки нод",
+    "check.watch.missing.short": "нет сборщика признаков блокировки",
+    "s6.found": "Найдено проблем: {problems}, из них с высоким риском: {high}.",
+    "s6.auto": "✓ KERBEROS исправит сам: {auto}",
+    "s6.manual": "✎ Вам вручную: {manual}",
+    "s6.block.auto": "✓ Исправит KERBEROS",
+    "s6.block.auto.note": "проблем: {problems} · областей: {areas}",
+    "s6.block.manual": "✎ Сделать вам",
+    "s6.block.manual.note": "проблем: {n}",
+    "s6.block.info": "i Пояснения",
+    "s6.info.row": "Что KERBEROS сознательно не меняет и почему: {n}",
+    "plan.block.auto": "KERBEROS сделает сам",
+    "plan.block.auto.note": "отмечено {n} из {total}",
+    "plan.block.domain": "Свой домен вместо чужого сайта",
+    "plan.block.domain.need": "Свой домен вместо чужого сайта: нужен домен и DNS-запись",
+    "plan.block.domain.note": "готово {n} из {total}",
+    "plan.partial": "{n} из {total}",
+    "plan.group.ssh_port.desc": (
+        "случайный порт вместо 22; старый закроется только после входа на новый"
+    ),
+    "plan.domain.enter": "d: ввести домен",
+    "plan.domain.record": "A-запись: {record}",
+    "plan.domain.no_reserve": "без резерва",
+    "plan.domain.blocked": "недоступно",
+    "plan.group.details": "{group}: {where} · отмечено {n} из {total}",
+    "keys.open_group": "по нодам",
+    "keys.close_group": "свернуть",
+    "keys.toggle_group": "отметить группу",
+    "consent.block.what": "Что изменится",
+    "consent.block.what.note": "изменений: {n}",
+    "consent.block.warnings": "⚠ Важно знать",
+    "consent.domain": "{domains}: свой сайт и сертификат, Reality на своём домене, копии хостов",
+    "consent.domain.xui": "{domains}: свой сайт и сертификат, Reality-инбаунды на своём домене",
+    "consent.reserve": "резерв {main}: {spare}",
+    "consent.backup": "Всё изменённое сохраняется в бэкап и откатывается одной командой.",
+    "s9.left.line": (
+        "Осталось проблем: {problems} · исправит следующий запуск: {auto} · вручную: {manual}"
+    ),
+    "s9.block.save": "⚠ Сохраните: новые адреса входа",
+    "s9.save.ssh": "{node}: {command}",
+    "s9.save.kerberos_ssh": "или с сервера панели: kerberos ssh <нода>",
+    "s9.save.hostkeys": (
+        "Ключи сервера сменились на {nodes}: перед входом выполните ssh-keygen -R <адрес>"
+    ),
+    "s9.block.failed": "✗ Не применилось",
+    "s9.block.done": "✓ Что сделал KERBEROS",
+    "s9.block.done.note": "Пробел: подробно по нодам",
+    "s9.block.left": "✎ Осталось вам",
+    "s9.block.next": "Дальше",
 }
 
 

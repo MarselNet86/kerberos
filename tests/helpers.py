@@ -94,12 +94,8 @@ def make_app(
 
 
 @cache
-def plan_rows() -> tuple[tuple[str, str], ...]:
-    """S7 rows of the demo fleet as (who, fixId) in screen order, as TO_PLAN reaches it.
-
-    `who` is the node name for node targets, else host, template or panel. Reserve
-    rows appear only after `r`, so they are not here.
-    """
+def demo_plan() -> tuple:
+    """Plan items of the demo fleet as TO_PLAN reaches S7, in plan order."""
     from demo_input import demo_input
 
     from kerberos.checks import run_checks
@@ -108,13 +104,50 @@ def plan_rows() -> tuple[tuple[str, str], ...]:
     _env, data = demo_input()
     admin = {"mode": "mine", "keys": ["ssh-ed25519 AAAA admin@laptop"]}
     names = {n.node.uuid: n.node.name for n in data.nodes}
-    rows = []
-    for item in build_plan(run_checks(data), data, admin, {}):
-        kind, _, ref = item.target.partition(":")
-        rows.append((names.get(ref, ref) if kind == "node" else kind, item.fix_id))
-    return tuple(rows)
+    plan = build_plan(run_checks(data), data, admin, {})
+    return tuple((item, names) for item in plan)
 
 
-def row_of(who: str, fix_id: str) -> int:
-    """Index of a row of S7: how many times to press ↓ from the top."""
+def _who(item, names: dict) -> str:
+    kind, _, ref = item.target.partition(":")
+    return names.get(ref, ref) if kind == "node" else kind
+
+
+def plan_rows() -> tuple[tuple[str, str], ...]:
+    """Items of the demo plan as (who, fixId), in plan order. `who` is the node name for
+    node targets, else host, template or panel. Reserve pairs come only with `r`."""
+    return tuple((_who(item, names), item.fix_id) for item, names in demo_plan())
+
+
+def plan_index(who: str, fix_id: str) -> int:
+    """Index of an item in session.data["plan"] of the demo fleet."""
     return plan_rows().index((who, fix_id))
+
+
+def on(who: str, fix_id: str, *keys: str) -> list[str]:
+    """S7 (K23): the keys that take the cursor to the row of (who, fix_id) of the demo
+    plan, press `keys` there and fold its group again with ←, so every call starts from
+    folded groups. `keys` must stay on S7 (Space, d, e, p, g, r and what they ask)."""
+    from kerberos.report.areas import plan_group
+    from kerberos.screens.fix import plan_rows as layout
+
+    items = [item for item, _names in demo_plan()]
+    target = plan_index(who, fix_id)
+    upper, domains = layout(items, set())
+    rows = upper + domains
+    if fix_id == "self_steal":
+        index = next(n for n, r in enumerate(rows) if r.kind == "domain" and r.indexes == [target])
+        return ["home"] + ["down"] * index + list(keys)
+    group = plan_group(fix_id)
+    index = next(n for n, r in enumerate(rows) if r.kind == "group" and r.group == group)
+    position = rows[index].indexes.index(target)
+    return ["home"] + ["down"] * index + ["right"] + ["down"] * (position + 1) + [*keys, "left"]
+
+
+def on_group(group: str, *keys: str) -> list[str]:
+    """S7 (K23): the keys that take the cursor to a group row of the demo plan."""
+    from kerberos.screens.fix import plan_rows as layout
+
+    upper, _domains = layout([item for item, _names in demo_plan()], set())
+    index = next(n for n, r in enumerate(upper) if r.kind == "group" and r.group == group)
+    return ["home"] + ["down"] * index + list(keys)

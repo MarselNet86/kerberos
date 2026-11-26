@@ -6,7 +6,7 @@ the names of the sections below) through the fake terminal.
 
 from datetime import datetime
 
-from helpers import TOKEN, flat, login_keys, make_app, row_of, seen, typed
+from helpers import TOKEN, flat, login_keys, make_app, on, seen, typed
 
 from kerberos.copy import plural, t
 from kerberos.demo.fleet import build_nodes, build_panel
@@ -69,7 +69,7 @@ def run_check(nodes=None, state=None, extra=INTRO + ALL_NODES, panel=None):
 
 
 def fix_with_self_steal(nodes=None):
-    keys = TO_PLAN + ["down"] * row_of("nl-1", "self_steal") + ["d"]
+    keys = TO_PLAN + on("nl-1", "self_steal", "d")
     keys += list("nl-1.example.com") + ["enter"] + APPLY
     app, term = make_app(keys, nodes=nodes, height=46)
     assert app.run("fix") == EXIT_OK
@@ -194,7 +194,7 @@ def test_finalize_lists_what_stays_and_what_goes():
 
 def test_3xui_finalize_lists_what_stays_and_what_goes():
     keys = CHOOSE_XUI + XUI_LOGIN + ["enter", "enter", "enter"]  # S2, S4 summary, S6
-    keys += ["down"] * 5 + ["d"] + list(XUI_DOMAIN) + ["enter"] + APPLY
+    keys += ["end", "d"] + list(XUI_DOMAIN) + ["enter"] + APPLY  # its domain: the last row
     app, term = make_app(keys, panel_kind=None, height=44)
     assert app.run("fix") == EXIT_OK
     name = store_of(app).runs()[0]["pending"][0]["nodeName"]

@@ -38,7 +38,7 @@ def test_s6_shows_score_findings_and_saved_report():
     assert len(runs) == 1 and runs[0]["mode"] == "check"
     assert t("report.score", score=runs[0]["scoreBefore"]) in frame
     assert runs[0]["scoreBefore"] < 60 and t("score.red") in frame
-    assert t("topic.hosting") in frame
+    assert t("s6.block.auto") in frame
     path = RunStore(app.env.state, app.env.clock).path(runs[0]["runId"])
     text = re.sub(r"\S*kerberos-test-\S*", "<state>", frame)
     assert_snapshot("s6", text.replace(runs[0]["runId"], "<run>"))
@@ -103,7 +103,9 @@ def test_masked_report_files(tmp_path):
 def test_details_open_with_space_and_full_report_with_s():
     app, term = check_run(extra=["space", "s", "pgdn", "esc"], height=40)
     frames = s6_frames(term)
-    assert "zone: example.com" in frames[1]
+    # K23: the first row is the area «Свой домен»; Space lists its problems.
+    title = t("check.reality.foreign_sni.title")
+    assert title not in frames[0] and title in frames[1]
     assert any(t("report.title.check") in f for f in term.frames)
 
 

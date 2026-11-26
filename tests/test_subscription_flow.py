@@ -1,6 +1,6 @@
 """Subscription templates, ping-type, fingerprint and reserves (tech.md §10.5, §10.9, K7)."""
 
-from helpers import login_keys, make_app, row_of, seen
+from helpers import login_keys, make_app, on, seen
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -16,8 +16,7 @@ TO_PLAN = login_keys() + ["enter", "enter"] + ["enter"] * 5 + ["esc"] + ["enter"
 TO_PLAN += ["enter", "enter", "enter"]
 APPLY = ["enter", "enter", "enter"]
 ROLLBACK = ["enter", "enter", "enter", "x"]  # the panel: the token saved by the fix run
-NL1, NL2 = row_of("nl-1", "self_steal"), row_of("nl-2", "self_steal")
-HOST_FINGERPRINT = row_of("host", "host.fingerprint")
+NL1, NL2 = "nl-1", "nl-2"  # rows of the block «Свой домен» of S7 (K23)
 
 
 def run_fix(extra, panel=None, nodes=None, state=None):
@@ -99,7 +98,7 @@ def test_templates_are_made_once_and_hand_edits_are_asked_about():
 
 
 def test_fingerprint_of_one_host():
-    keys = ["down"] * HOST_FINGERPRINT + ["space"] + APPLY
+    keys = on("host", "host.fingerprint", "space") + APPLY
     app, term, code, panel, _nodes = run_fix(keys)
     host = next(h for h in panel.hosts if h["remark"] == "NL Reality")
     assert host["fingerprint"] == "firefox"
@@ -109,9 +108,9 @@ def test_fingerprint_of_one_host():
 
 
 def reserve_keys():
-    keys = ["down"] * NL1 + ["d"] + list("nl-1.example.com") + ["enter"]
+    keys = on(NL1, "self_steal", "d", *"nl-1.example.com", "enter")
     keys += ["r", "down", "enter"]  # the reserve of nl-1 is nl-2
-    keys += ["down"] * (NL2 - NL1) + ["d"] + list("nl-2.example.com") + ["enter"]
+    keys += on(NL2, "self_steal", "d", *"nl-2.example.com", "enter")
     return keys
 
 
@@ -139,7 +138,7 @@ def test_main_and_reserve_share_tags_and_the_reserve_is_hidden():
 
 
 def test_without_reserve_the_copies_get_the_single_template():
-    keys = ["down"] * NL1 + ["d"] + list("nl-1.example.com") + ["enter"]
+    keys = on(NL1, "self_steal", "d", *"nl-1.example.com", "enter")
     app, _term, code, panel, _nodes = run_fix(keys + APPLY)
     run = RunStore(app.env.state, app.env.clock).runs()[0]
     created = next(c for c in run["changes"] if c["fixId"] == "self_steal.hosts")

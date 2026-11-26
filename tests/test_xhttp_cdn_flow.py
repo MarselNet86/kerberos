@@ -2,7 +2,7 @@
 
 import random
 
-from helpers import login_keys, make_app, row_of, seen
+from helpers import login_keys, make_app, on, seen
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -16,10 +16,7 @@ TO_PLAN = login_keys() + ["enter", "enter"] + ["enter"] * 5 + ["esc"] + ["enter"
 TO_PLAN += ["enter", "enter", "enter"]
 APPLY = ["enter", "enter", "enter"]  # S7 → consent → accept → S9 Enter
 ROLLBACK = ["enter", "enter", "enter", "x"]  # the panel: the token saved by the fix run
-CDN_ROW = row_of("fi-1", "cdn.edge_only")
-TEMPLATE_ROW = row_of("template", "sub.template")
-WATCH_ROW = row_of("nl-1", "watch.install")
-CONFIRM_EDGES = ["down"] * CDN_ROW + ["e", "enter"]  # the list of nets, all marked, confirmed
+CONFIRM_EDGES = on("fi-1", "cdn.edge_only", "e", "enter")  # the nets, all marked, confirmed
 LEAVE = ["esc", "q", "enter"]  # S7 → S6 → quit
 
 
@@ -96,7 +93,7 @@ def test_nets_that_miss_the_edge_are_rolled_back():
 def test_realip_blocks_the_filter():
     nodes = {n.name: n for n in build_nodes()}
     nodes["fi-1"].state["facts"]["nginx"]["realip"] = True
-    app, term, _code, _panel, _nodes = run_fix(["down"] * CDN_ROW + ["e", "space"] + LEAVE,
+    app, term, _code, _panel, _nodes = run_fix(on("fi-1", "cdn.edge_only", "e", "space") + LEAVE,
                                                nodes=nodes)  # fmt: skip
     assert seen(term, t("plan.blocked.realip_enabled"))
     assert not [cmd for _a, cmd in app.env.transport.log if "edge-sources" in cmd]
@@ -105,10 +102,11 @@ def test_realip_blocks_the_filter():
 
 def test_a_skips_the_filter_and_enter_asks_for_nets():
     app, term, _code, _panel, _nodes = run_fix(["a"] + LEAVE)
-    # Four self-steals and the CDN filter wait for input; `a` leaves the four SSH ports.
-    marked = len(app.session.data["plan"]) - 9
-    assert seen(term, t("plan.selected", n=marked, total=len(app.session.data["plan"])))
-    app2, term2, _code, _p, _n = run_fix(["down"] * CDN_ROW + ["space", "enter"] + LEAVE)
+    # The CDN filter waits for its nets, `a` leaves the four SSH ports; the four own
+    # domains are a block of their own (K23).
+    in_groups = [i for i in app.session.data["plan"] if i.fix_id != "self_steal"]
+    assert seen(term, t("plan.block.auto.note", n=len(in_groups) - 5, total=len(in_groups)))
+    app2, term2, _code, _p, _n = run_fix(on("fi-1", "cdn.edge_only", "space") + ["enter"] + LEAVE)
     assert seen(term2, t("plan.need_edges"))
     assert not [cmd for _a, cmd in app2.env.transport.log if cmd.startswith("apply")]
 
@@ -116,7 +114,7 @@ def test_a_skips_the_filter_and_enter_asks_for_nets():
 def test_panel_failure_in_the_middle_of_padding_undoes_it():
     panel = build_panel()
     panel.fail("PATCH", "/hosts", 500, times=4)  # the first try and three retries
-    keys = ["down"] * TEMPLATE_ROW + ["space"] + APPLY  # no sub.template: padding patches first
+    keys = on("template", "sub.template", "space") + APPLY  # no sub.template: padding first
     app, term, code, panel, _nodes = run_fix(keys, panel=panel)
     assert code == EXIT_PARTIAL
     padding = changes(app, "xhttp.padding")[0]
@@ -127,7 +125,7 @@ def test_panel_failure_in_the_middle_of_padding_undoes_it():
 
 
 def test_watch_is_installed_by_choice_and_rolled_back():
-    app, _term, code, _panel, nodes = run_fix(["down"] * WATCH_ROW + ["space"] + APPLY)
+    app, _term, code, _panel, nodes = run_fix(on("nl-1", "watch.install", "space") + APPLY)
     assert code == EXIT_OK
     assert nodes["nl-1"].state["facts"]["watch"]["installed"] is True
     assert changes(app, "watch.install")[0]["state"] == "applied"

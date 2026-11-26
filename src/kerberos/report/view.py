@@ -6,10 +6,14 @@ import ipaddress
 import string
 from typing import Callable, Optional
 
+from rich.text import Text
+
 from kerberos.checks import spec
 from kerberos.copy import TEXT, t
 from kerberos.fixes.model import TOPICS, Finding
-from kerberos.ui.widgets import FindingItem
+from kerberos.report.areas import area_of, area_order, area_title, check_short, joined, where
+from kerberos.ui.palette import SYMBOL_RISK, risk_style
+from kerberos.ui.widgets import Block, BlockRow, Column
 
 RISK_ORDER = {"high": 0, "medium": 1, "low": 2, "info": 3}
 
@@ -140,17 +144,16 @@ def _group_key(item: Finding, node_names: dict, clusters: dict) -> Optional[tupl
 
 
 def rows(findings: list[Finding], node_names: Optional[dict] = None) -> list[list[Finding]]:
-    """Problems as S6 shows them: a row each, a group of the fleet checks one row."""
+    """Problems as the screens show them (K23): one row a check on all its targets;
+    the fleet checks one row a group of nodes (K22)."""
     node_names = node_names or {}
     failing = problems(findings)
     clusters = _clusters(failing, node_names)
     result: list[list[Finding]] = []
     groups: dict[tuple, list[Finding]] = {}
     for item in failing:
-        key = _group_key(item, node_names, clusters)
-        if key is None:
-            result.append([item])
-        elif key in groups:
+        key = _group_key(item, node_names, clusters) or (item["checkId"],)
+        if key in groups:
             groups[key].append(item)
         else:
             groups[key] = [item]
@@ -166,66 +169,165 @@ def _net_order(net: str) -> tuple:
 
 
 def row_evidence(members: list[Finding]) -> dict:
-    """The evidence of a row: the first finding's, widened to the whole group."""
+    """The evidence of a row: the first finding's, widened to the whole row."""
     evidence = dict(members[0]["evidence"])
-    if len(members) > 1:
-        evidence.pop("with", None)  # the row names every node itself
-        if members[0]["checkId"] == "fleet.same_24":
-            nets = {m["evidence"].get("net", "") for m in members} - {""}
-            evidence["net"] = ", ".join(sorted(nets, key=_net_order))
+    if len(members) == 1:
+        return evidence
+    evidence.pop("with", None)  # the row names every node itself
+    if members[0]["checkId"] == "fleet.same_24":
+        nets = {m["evidence"].get("net", "") for m in members} - {""}
+        evidence["net"] = ", ".join(sorted(nets, key=_net_order))
+        return evidence
+    for key in list(evidence):
+        values: list = []
+        for member in members:
+            value = member["evidence"].get(key)
+            for part in value if isinstance(value, (list, tuple)) else [value]:
+                if part is not None and part not in values:
+                    values.append(part)
+        evidence[key] = values[0] if len(values) == 1 else values
     return evidence
 
 
-def todo(finding: Finding) -> tuple[str, str]:
-    """The «Что делать» cell of S6 (K22): in full and in one word."""
-    if finding["ok"]:
-        return t("action.passed"), t("action.passed")
+def todo(finding: Finding) -> str:
+    """What to do about a problem KERBEROS does not fix itself, as a sentence."""
     item = spec(finding["checkId"])
     how = TEXT.get(f"check.{finding['checkId']}.how", "")
-    if item.kind == "fix" and finding["fixId"]:
-        return t("todo.fix"), t("todo.fix.short")
     if item.kind == "fix":
         how = TEXT.get(f"check.{finding['checkId']}.manual") or how
-        kind = "manual"
-    else:
-        kind = item.kind if item.kind in ("explain", "plan") else "manual"
-    return how[:1].upper() + how[1:], t(f"todo.{kind}.short")
+    return how[:1].upper() + how[1:]
 
 
-def finding_items(
-    findings: list[Finding], node_names: dict, mask: Optional[Callable[[str], str]] = None
-) -> list[FindingItem]:
-    mask = mask or (lambda value: value)
-    items = []
-    for members in rows(findings, node_names):
-        item = members[0]
-        evidence = row_evidence(members)
-        if len(members) > 1:
-            target = ", ".join(node_name(m, node_names) for m in members)
+def row_where(members: list[Finding], node_names: dict) -> tuple[list[str], list[str]]:
+    """Who a row is about: node names, then the panel, hosts and templates by name."""
+    nodes, others = [], []
+    for member in members:
+        if member["target"].startswith("node:"):
+            nodes.append(node_name(member, node_names))
         else:
-            target = target_label(item, node_names)
-        label, style = action(item)
-        full, short = todo(item)
-        items.append(
-            FindingItem(
-                risk=item["risk"],
-                group=t(f"topic.{item['topic']}"),
-                target=mask(target),
-                title=mask(fill(f"check.{item['checkId']}.title", evidence)),
-                threat=TEXT.get(f"check.{item['checkId']}.threat", ""),
-                action=mask(label),
-                action_style=style,
-                details=mask(details(evidence)),
-                extra={
-                    "checkId": item["checkId"],
-                    "target": item["target"],
-                    "targets": [m["target"] for m in members],
-                },  # fmt: skip
-                todo=mask(full),
-                todo_short=short,
+            others.append(target_label(member, node_names))
+    return nodes, others
+
+
+def risk_cell(risk: str) -> Text:
+    return Text(f"{SYMBOL_RISK} {t('risk.' + risk)}", style=risk_style(risk))
+
+
+def worst(members_list: list[list[Finding]]) -> str:
+    return min((m[0]["risk"] for m in members_list), key=lambda r: RISK_ORDER[r])
+
+
+def _title(members: list[Finding], mask: Callable[[str], str]) -> str:
+    return mask(fill(f"check.{members[0]['checkId']}.title", row_evidence(members)))
+
+
+def _problem_line(members: list[Finding], node_names: dict, mask: Callable[[str], str]) -> Text:
+    nodes, others = row_where(members, node_names)
+    line = Text(f"{SYMBOL_RISK} ", style=risk_style(members[0]["risk"]))
+    line.append(_title(members, mask))
+    line.append(" · " + mask(where(nodes, others)), style="muted")
+    return line
+
+
+AUTO_COLUMNS = [Column(most=10), Column(most=20), Column(flex=1, least=16),
+                Column(most=16, least=6)]  # fmt: skip
+MANUAL_COLUMNS = [Column(most=10), Column(flex=1, least=16), Column(most=16, least=6),
+                  Column(flex=1, least=12)]  # fmt: skip
+INFO_COLUMNS = [Column(most=1), Column(flex=1, least=10)]
+
+
+def report_blocks(findings: list[Finding], node_names: dict,
+                  mask: Optional[Callable[[str], str]] = None,
+                  parts: tuple = ("auto", "manual", "info")) -> list[Block]:  # fmt: skip
+    """S6 in blocks (K23): what KERBEROS fixes itself, one row an area; what is left
+    to the person, one row a problem; the explanations folded into one row. S9 takes
+    only the part «manual»: what is left to the person after the run."""
+    mask = mask or (lambda value: value)
+    by_area: dict[str, list[list[Finding]]] = {}
+    manual: list[list[Finding]] = []
+    info: list[list[Finding]] = []
+    for members in rows(findings, node_names):
+        first = members[0]
+        if auto_fixable(first):
+            by_area.setdefault(area_of(first["fixId"]), []).append(members)
+        elif first["risk"] == "info":
+            info.append(members)
+        else:
+            manual.append(members)
+    blocks = []
+    if by_area and "auto" in parts:
+        area_rows = []
+        for area in sorted(by_area, key=area_order):
+            members_list = sorted(by_area[area], key=lambda m: RISK_ORDER[m[0]["risk"]])
+            nodes, others = [], []
+            for members in members_list:
+                names, rest = row_where(members, node_names)
+                nodes += names
+                others += rest
+            found = [check_short(m[0]["checkId"], _title(m, mask)) for m in members_list]
+            shorts = joined(found, 3)
+            details = []
+            for members in members_list:
+                details.append(_problem_line(members, node_names, mask))
+                threat = TEXT.get(f"check.{members[0]['checkId']}.threat", "")
+                if threat:
+                    details.append(Text("  " + threat, style="muted"))
+            area_rows.append(BlockRow(
+                [risk_cell(worst(members_list)), Text(area_title(area), style="bold"),
+                 Text(mask(shorts)), Text(mask(where(nodes, others)), style="muted")],
+                details, key=("area", area)))  # fmt: skip
+        counted = sum(1 for found in by_area.values() for m in found if m[0]["risk"] != "info")
+        blocks.append(
+            Block(
+                t("s6.block.auto"),
+                area_rows,
+                AUTO_COLUMNS,
+                "ok",
+                t("s6.block.auto.note", problems=counted, areas=len(by_area)),
             )
         )
-    return items
+    if manual and "manual" in parts:
+        manual.sort(key=lambda m: (RISK_ORDER[m[0]["risk"]], TOPICS.index(m[0]["topic"])))
+        manual_rows = []
+        for members in manual:
+            nodes, others = row_where(members, node_names)
+            details = [Text(TEXT.get(f"check.{members[0]['checkId']}.threat", ""), style="muted")]
+            evidence = details_text(members)
+            if evidence:
+                details.append(Text(mask(evidence), style="muted"))
+            manual_rows.append(BlockRow(
+                [risk_cell(members[0]["risk"]), Text(_title(members, mask)),
+                 Text(mask(where(nodes, others)), style="muted"),
+                 Text(mask(todo(members[0])), style="risk.medium")],
+                [d for d in details if d.plain], key=("row", members[0]["checkId"],
+                                                      members[0]["target"])))  # fmt: skip
+        blocks.append(
+            Block(
+                t("s6.block.manual"),
+                manual_rows,
+                MANUAL_COLUMNS,
+                "risk.medium",
+                t("s6.block.manual.note", n=len(manual)),
+            )
+        )
+    if info and "info" in parts:
+        lines = []
+        for members in info:
+            lines.append(_problem_line(members, node_names, mask))
+            how = todo(members[0])
+            if how:
+                lines.append(Text("  " + mask(how), style="muted"))
+        row = BlockRow([Text("i", style="bold"), Text(t("s6.info.row", n=len(info)))], lines,
+                       key=("info",))  # fmt: skip
+        blocks.append(Block(t("s6.block.info"), [row], INFO_COLUMNS))
+    return blocks
+
+
+def details_text(members: list[Finding]) -> str:
+    """The machine facts of a row: per target when the row covers several."""
+    if len(members) == 1:
+        return details(members[0]["evidence"])
+    return details(row_evidence(members))
 
 
 def auto_fixable(finding: Finding) -> bool:
