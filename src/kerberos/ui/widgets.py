@@ -769,9 +769,12 @@ class BlockList:
 
     @staticmethod
     def _side(content: Text, width: int, style: str) -> Text:
+        """A line inside the frame: only the borders take the block's colour, the base
+        style of the line would colour every cell of the row."""
         inner = content.copy()
         inner.truncate(max(1, width - 4), pad=True)
-        line = Text("│ ", style=style)
+        line = Text()
+        line.append("│ ", style=style)
         line.append_text(inner)
         line.append(" │", style=style)
         return line
