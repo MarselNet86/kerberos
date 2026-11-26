@@ -186,3 +186,16 @@ def test_markup_is_never_interpreted():
     console = make_console(io.StringIO(), 40, 5, color=False, record=True)
     console.print("[bold]not markup[/bold]")
     assert "[bold]" in console.export_text()
+
+
+def test_block_rows_keep_their_own_colour_inside_a_coloured_frame():
+    """K23 on the first screenshots: every word of a block came out in its frame's green."""
+    listing = BlockList([Block("✓ Блок", [BlockRow([Text("x"), Text("обычный текст")])],
+                               COLUMNS, style="ok")])  # fmt: skip
+    rich = make_console(io.StringIO(), width=60, height=20, color=True)
+    lines = listing.lines(rich, 60)[0]
+    row = lines[1]
+    body = row.plain.index("обычный")
+    styles = {str(span.style) for span in row.spans if span.start <= body < span.end}
+    assert "ok" not in styles and str(row.style) != "ok", "the text keeps the default colour"
+    assert any(str(span.style) == "ok" for span in row.spans if span.start == 0)
