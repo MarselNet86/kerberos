@@ -47,20 +47,21 @@ APPLY = ["enter", "enter", "enter"]  # S7 → consent → accept → S9 Enter
 
 
 def plan_keys(app: App, items: list[Any]) -> list[str]:
-    """In S7: all that can run, the SSH ports (`a` leaves them to the person, §6), a
-    domain for every self-steal, the confirmed CDN nets."""
-    keys, cursor = ["a"], 0
-    for row, item in enumerate(items):
-        if item.fix_id not in ("ssh.port", "self_steal", "cdn.edge_only"):
-            continue
-        keys += ["down"] * (row - cursor)
-        cursor = row
-        if item.fix_id == "ssh.port":
-            keys.append("space")
-        elif item.fix_id == "self_steal":
-            keys += ["d"] + typed(f"{app.session_name(item.node_uuid)}.example.com") + ["enter"]
-        else:
-            keys += ["e", "enter"]
+    """In S7 (K23): all that can run, the group of new SSH ports (`a` leaves it to the
+    person, §6), the confirmed CDN nets, a domain in every row of the own domain."""
+    from kerberos.screens.fix import plan_rows
+
+    upper, domains = plan_rows(items, set())
+    keys = ["a"]
+    for index, row in enumerate(upper + domains):
+        go = ["home"] + ["down"] * index
+        if row.kind == "group" and row.group == "ssh_port":
+            keys += go + ["space"]
+        elif row.kind == "group" and any(items[i].fix_id == "cdn.edge_only" for i in row.indexes):
+            keys += go + ["e", "enter"]
+        elif row.kind == "domain":
+            name = app.session_name(items[row.indexes[0]].node_uuid)
+            keys += go + ["d"] + typed(f"{name}.example.com") + ["enter"]
     return keys
 
 

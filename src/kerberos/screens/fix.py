@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import random
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from rich import box
 from rich.console import Group, RenderableType
 from rich.panel import Panel
+from rich.table import Table
 from rich.text import Text
 
 from kerberos.checks import run_checks
@@ -26,27 +28,41 @@ from kerberos.fixes.plan import (
     follow_admin_key,
 )
 from kerberos.flow import BACK, EXIT_OK, NEXT
+from kerberos.report.areas import (
+    PLAN_GROUPS,
+    area_of,
+    area_order,
+    area_title,
+    fix_short,
+    joined,
+    plan_group,
+    where,
+)
 from kerberos.report.view import change_target, counts
 from kerberos.screens.check import (
     COMPACT_BELOW,
-    report_header,
     show_full_report,
     show_pager,
     without_access,
     write_report,
 )
 from kerberos.ui.keys import hotkey
-from kerberos.ui.palette import risk_style
+from kerberos.ui.palette import SYMBOL_FAIL, SYMBOL_OK, SYMBOL_ROLLED_BACK
 from kerberos.ui.widgets import (
+    Block,
+    BlockList,
+    BlockRow,
     Checklist,
     Clamp,
+    Column,
     Consent,
     Hanging,
     Notice,
-    Pager,
     ProgressBoard,
+    ScoreBadge,
     Stack,
     TextInput,
+    bold,
 )
 
 if TYPE_CHECKING:
@@ -409,9 +425,14 @@ def ask_portal_login(app: App, session: Session, item: PlanItem) -> None:
 
 
 # -- S7 -------------------------------------------------------------------------
-FIX_COLUMN = 1  # «Исправление»: the column that keeps its width in a narrow terminal
-FIX_COLUMN_MIN = 30
 DETAILS_LINES = 3
+PLAN_COLUMNS = [Column(most=3), Column(most=22), Column(flex=1, least=16),
+                Column(most=18, least=6)]  # fmt: skip
+DOMAIN_COLUMNS = [Column(most=3), Column(most=14), Column(flex=1, least=12), Column(most=14),
+                  Column(flex=1, least=10)]  # fmt: skip
+# What a group row asks before its items can be marked (e, p work on the group row too).
+NEEDS = {"self_steal": "plan.need_domain", "cdn.edge_only": "plan.need_edges",
+         "panel.portal": "plan.need_portal"}  # fmt: skip
 
 
 def note_of(app: App, item: PlanItem) -> str:
@@ -469,6 +490,148 @@ def plan_details(app: App, session: Session, item: PlanItem) -> RenderableType:
     return Clamp(Group(*lines), DETAILS_LINES, pad=True)
 
 
+@dataclass
+class PlanRow:
+    """A row of S7 (K23): a group of measures, one item of an open group, or the own
+    domain of a node."""
+
+    kind: str  # "group", "item" or "domain"
+    group: str
+    indexes: list
+
+
+def plan_rows(items: list[PlanItem], expanded: set) -> tuple[list[PlanRow], list[PlanRow]]:
+    """The rows of the two blocks of S7: a row a group of measures, its items under it
+    when open; a row a node for its own domain. A reserve pair shows in the row of its
+    main node: it is chosen there (r)."""
+    groups: dict[str, list[int]] = {}
+    domains = []
+    for i, item in enumerate(items):
+        if item.fix_id == "self_steal":
+            domains.append(PlanRow("domain", "domain", [i]))
+        elif item.fix_id != "reserve":
+            groups.setdefault(plan_group(item.fix_id), []).append(i)
+    upper: list[PlanRow] = []
+    order = [g for g in PLAN_GROUPS if g in groups] + [g for g in groups if g not in PLAN_GROUPS]
+    for group in order:
+        upper.append(PlanRow("group", group, groups[group]))
+        if group in expanded:
+            upper += [PlanRow("item", group, [i]) for i in groups[group]]
+    return upper, domains
+
+
+def free_items(items: list[PlanItem], row: PlanRow) -> list[PlanItem]:
+    return [items[i] for i in row.indexes if not items[i].blocked]
+
+
+def mark_of(items: list[PlanItem], row: PlanRow) -> str:
+    """[✓] all, [ ] none, [~] a part of a group; « - » when nothing in it can run."""
+    free = free_items(items, row)
+    if not free:
+        return " - "
+    marked = sum(1 for item in free if item.selected)
+    if marked == len(free):
+        return "[✓]"
+    return "[~]" if marked else "[ ]"
+
+
+def targets_where(app: App, session: Session, chosen: list[PlanItem]) -> str:
+    nodes, others = [], []
+    for item in chosen:
+        name = app.mask(node_name(session, item.target, item.params))
+        (nodes if item.node_uuid or item.params.get("node") else others).append(name)
+    return where(nodes, others)
+
+
+def group_row(app: App, session: Session, items: list[PlanItem], row: PlanRow) -> BlockRow:
+    free = free_items(items, row)
+    marked = sum(1 for item in free if item.selected)
+    chosen = [items[i] for i in row.indexes]
+    if 0 < marked < len(free):
+        right = Text(t("plan.partial", n=marked, total=len(free)), style="risk.medium")
+    else:
+        right = Text(targets_where(app, session, chosen), style="muted")
+    key = f"plan.group.{row.group}.desc"  # a group of one measure says what it does
+    measures = t(key) if key in TEXT else joined(fix_short(item.fix_id) for item in chosen)
+    return BlockRow([Text(mark_of(items, row)), Text(area_title(row.group), style="bold"),
+                     Text(measures), right], muted=not free)  # fmt: skip
+
+
+def item_row(app: App, session: Session, items: list[PlanItem], row: PlanRow) -> BlockRow:
+    item = items[row.indexes[0]]
+    name = app.mask(node_name(session, item.target, item.params))
+    return BlockRow([Text(mark_of(items, row)), Text("  " + name), Text(fix_label(app, item)),
+                     Text(note_of(app, item), style="muted")], muted=bool(item.blocked),
+                    main=2)  # fmt: skip
+
+
+def domain_row(app: App, session: Session, items: list[PlanItem], row: PlanRow) -> BlockRow:
+    """Node, domain, DNS and what the row waits for: the record to make, else the reserve."""
+    item = items[row.indexes[0]]
+    domain = item.params.get("domain")
+    cell = Text(app.mask(domain)) if domain else Text(t("plan.domain.enter"), style="muted")
+    dns = item.params.get("dns")
+    if item.blocked:
+        state = Text(t("plan.domain.blocked"), style="muted")
+        note = Text(t(f"plan.blocked.{item.blocked}"))
+    else:
+        state = {"ok": Text(t("plan.domain.ok"), style="ok"),
+                 "wait": Text("… " + t("plan.domain.waiting"), style="risk.medium")}.get(
+            dns, Text(t("plan.domain.none"), style="risk.medium"))  # fmt: skip
+        if dns == "wait":
+            note = Text(t("plan.domain.record", record=app.mask(item.params.get("record", ""))))
+        elif not domain:
+            note = Text("")  # the reserve matters once the node has its domain
+        elif item.params.get("reserve"):
+            note = Text(app.mask(t("plan.reserve.with",
+                                   node=app.session_name(item.params["reserve"]))))  # fmt: skip
+        elif item.params.get("reserveOf"):
+            note = Text(app.mask(t("plan.reserve.of",
+                                   node=app.session_name(item.params["reserveOf"]))))  # fmt: skip
+        elif session.snapshot.kind == "3x-ui":
+            note = Text("")  # no reserves on 3x-ui (§7.6)
+        else:
+            note = Text(t("plan.domain.no_reserve"), style="muted")
+    name = app.mask(app.session_name(item.node_uuid))
+    return BlockRow([Text(mark_of(items, row)), Text(name, style="bold"), cell, state, note],
+                    muted=bool(item.blocked))  # fmt: skip
+
+
+def plan_blocks(app: App, session: Session, items: list[PlanItem], upper: list[PlanRow],
+                domains: list[PlanRow]) -> list[Block]:  # fmt: skip
+    blocks = []
+    if upper:
+        rows = [group_row(app, session, items, row) if row.kind == "group"
+                else item_row(app, session, items, row) for row in upper]  # fmt: skip
+        free = [item for row in upper if row.kind == "group" for item in free_items(items, row)]
+        note = t("plan.block.auto.note", n=sum(1 for i in free if i.selected), total=len(free))
+        blocks.append(Block(t("plan.block.auto"), rows, PLAN_COLUMNS, "ok", note))
+    if domains:
+        free = [item for row in domains for item in free_items(items, row)]
+        ready = [item for item in free if item.params.get("dns") == "ok"]
+        waiting = len(ready) < len(free)
+        title = t("plan.block.domain.need") if waiting else t("plan.block.domain")
+        rows = [domain_row(app, session, items, row) for row in domains]
+        note = t("plan.block.domain.note", n=len(ready), total=len(free))
+        blocks.append(Block(title, rows, DOMAIN_COLUMNS, "accent" if waiting else "ok", note))
+    return blocks
+
+
+def group_details(app: App, session: Session, items: list[PlanItem],
+                  row: PlanRow) -> RenderableType:  # fmt: skip
+    """Under the blocks for a group row: where it runs, how much is marked, its warning."""
+    free = free_items(items, row)
+    chosen = [items[i] for i in row.indexes]
+    head = Text(t("plan.group.details", group=area_title(row.group),
+                  where=targets_where(app, session, chosen),
+                  n=sum(1 for i in free if i.selected), total=len(free)), style="bold")  # fmt: skip
+    lines: list[RenderableType] = [head]
+    warnings = consent_warnings(app, session, free)
+    if warnings:
+        lines.append(Text(t("plan.details.warning", text=warnings[0]), style="muted"))
+    return Clamp(Group(*lines), DETAILS_LINES, pad=True)
+
+
 def step_plan(app: App, session: Session) -> Any:
     data = session.data["input"]
     if "plan" not in session.data:
@@ -485,39 +648,32 @@ def step_plan(app: App, session: Session) -> Any:
         app.notice("info", t("plan.empty"), t("plan.title"))
         return NEXT
     xui = session.snapshot.kind == "3x-ui"
-    disabled = {i for i, item in enumerate(items) if item.blocked}
-    checklist = Checklist([], [t("plan.col.node"), t("plan.col.fix"), t("plan.col.risk"),
-                               t("plan.col.note")],  # fmt: skip
-                          selected={i for i, item in enumerate(items) if item.selected},
-                          disabled=disabled, flexible=FIX_COLUMN, min_width=FIX_COLUMN_MIN,
-                          reach_disabled=True)  # fmt: skip
+    expanded: set = session.data.setdefault("plan_open", set())
+    listing = BlockList()
+    state: dict = {"error": None, "next_dns": app.env.clock.monotonic() + 10, "rows": []}
 
-    def rows() -> list[list[Any]]:
-        result = []
-        for item in items:
-            importance = Text(t("importance." + item.risk), style=risk_style(item.risk))
-            result.append([app.mask(node_name(session, item.target, item.params)),
-                           fix_label(app, item), importance, note_of(app, item)])  # fmt: skip
-        return result
+    def layout() -> list[PlanRow]:
+        upper, domains = plan_rows(items, expanded)
+        listing.blocks = plan_blocks(app, session, items, upper, domains)
+        state["rows"] = upper + domains
+        return state["rows"]
 
-    def current() -> Optional[PlanItem]:
-        return items[checklist.cursor] if items else None
+    def current() -> Optional[PlanRow]:
+        rows = state["rows"] or layout()
+        listing.current()  # keeps the cursor on a row
+        return rows[listing.cursor] if rows else None
 
     def body(_w: int, _height: int) -> RenderableType:
-        checklist.rows = rows()
-        checklist.disabled = {i for i, item in enumerate(items) if item.blocked}
-        for i, item in enumerate(items):
-            item.selected = i in checklist.selected
         follow_admin_key(items)
-        checklist.selected = {i for i, item in enumerate(items) if item.selected}
-        tail: list[RenderableType] = [
-            Text(t("plan.selected", n=len(checklist.selected), total=len(items)), style="muted")
-        ]
+        layout()
+        tail: list[RenderableType] = []
         row = current()
-        if row is not None:
+        if row is not None and row.kind == "group" and len(row.indexes) > 1:
+            tail.append(group_details(app, session, items, row))
+        elif row is not None:
             # One row at a time: records of several waiting domains would push the
-            # table off a low screen; the column «Заметка» says which rows wait.
-            tail.append(plan_details(app, session, row))
+            # blocks off a low screen; the rows say which of them wait.
+            tail.append(plan_details(app, session, items[row.indexes[0]]))
         if any(i.fix_id == "self_steal" and i.selected for i in items):
             auto = session.data.get("auto_finalize", False)
             key = "plan.finalize.auto" if auto else "plan.finalize.manual"
@@ -526,9 +682,7 @@ def step_plan(app: App, session: Session) -> Any:
             tail.append(Text(t(key), style="muted"))
         if state["error"]:
             tail.append(Notice("warning", state["error"]))
-        return Stack(Text(t("plan.title"), style="bold"), checklist, *tail, flex=1)
-
-    state: dict = {"error": None, "next_dns": app.env.clock.monotonic() + 10}
+        return Stack(listing, *tail, flex=0)
 
     def tick() -> Optional[str]:
         # Waiting domains are resolved again every 10 seconds (§10.4).
@@ -537,87 +691,131 @@ def step_plan(app: App, session: Session) -> Any:
             for item in items:
                 if item.fix_id == "self_steal" and item.params.get("dns") == "wait":
                     dns_state(app, session, item)
-                    if item.selected:
-                        checklist.selected.add(items.index(item))
         return None
 
     def mark_all() -> None:
-        """`a`: everything that can run now, except the SSH port (§6: the person marks it);
+        """`a`: everything that can run now, except the SSH port and the way into the
+        panel (§6: the person marks them) and the reserve pairs (chosen with r);
         pressed again, it takes back what it marked."""
-        waiting = {i for i, item in enumerate(items) if waits_for_input(item)}
-        marked = {i for i, item in enumerate(items)
-                  if not (item.blocked or i in waiting or item.fix_id in PERSON_MARKS)}  # fmt: skip
-        if marked <= checklist.selected:
-            checklist.selected -= marked
-        else:
-            checklist.selected |= marked
-        checklist.selected -= waiting
+        marked = [i for i in items if not (i.blocked or waits_for_input(i) or i.fix_id
+                                           in PERSON_MARKS or i.fix_id == "reserve")]  # fmt: skip
+        on = not all(i.selected for i in marked)
+        for item in marked:
+            item.selected = on
+        for item in items:
+            if waits_for_input(item):
+                item.selected = False
+
+    def toggle(row: PlanRow) -> None:
+        """Space: the item of the row, or every item of a group that can run now."""
+        if row.kind != "group":
+            item = items[row.indexes[0]]
+            if not item.blocked:
+                item.selected = not item.selected
+            return
+        free = free_items(items, row)
+        waiting = [i for i in free if waits_for_input(i)]
+        # Rows that wait for input are left out of «all marked»: the group could never
+        # be unmarked otherwise. Marked, the group says what they wait for.
+        markable = [i for i in free if i not in waiting]
+        on = not markable or not all(i.selected for i in markable)
+        for item in free:
+            item.selected = on and item not in waiting
+        if on and waiting:
+            state["error"] = t(NEEDS[waiting[0].fix_id])
+
+    def input_item(row: Optional[PlanRow], fix_id: str) -> Optional[PlanItem]:
+        """The item a key of input works on: the row's own, or the first of its group."""
+        if row is None or row.kind == "domain":
+            return None
+        return next((items[i] for i in row.indexes
+                     if items[i].fix_id == fix_id and not items[i].blocked), None)  # fmt: skip
 
     def handle(key: str) -> Optional[str]:
         state["error"] = None
         if key == "esc":
             return BACK
-        item = current()
+        row = current()
+        item = items[row.indexes[0]] if row is not None and row.kind == "domain" else None
         free = item is not None and not item.blocked
-        if hotkey(key) == "d" and free and item.fix_id == "self_steal":
+        if key == "right" and row is not None and row.kind == "group":
+            expanded.add(row.group)
+            return None
+        if key == "left" and row is not None and row.group in expanded:
+            expanded.discard(row.group)
+            rows = layout()
+            listing.cursor = next(i for i, r in enumerate(rows)
+                                  if r.kind == "group" and r.group == row.group)  # fmt: skip
+            return None
+        if key == "space" and row is not None:
+            toggle(row)
+            follow_admin_key(items)
+            return None
+        if hotkey(key) == "d" and free:
             ask_domain(app, session, item)
-            if item.selected:
-                checklist.selected.add(checklist.cursor)
             return None
-        if hotkey(key) == "e" and free and item.fix_id == "cdn.edge_only":
-            confirm_edges(app, session, item)
-            if item.selected:
-                checklist.selected.add(checklist.cursor)
-            return None
-        if hotkey(key) == "p" and free and item.fix_id == "panel.portal":
-            ask_portal_login(app, session, item)
-            if item.selected:
-                checklist.selected.add(checklist.cursor)
-            return None
-        if hotkey(key) == "g" and free and item.fix_id == "self_steal":
+        if hotkey(key) == "g" and free:
             new_site(session, item)
+            return None
+        if hotkey(key) == "r" and free and not xui:
+            choose_reserve(app, session, items, item)
+            return None
+        edges = input_item(row, "cdn.edge_only")
+        if hotkey(key) == "e" and edges is not None:
+            confirm_edges(app, session, edges)
+            return None
+        portal = input_item(row, "panel.portal")
+        if hotkey(key) == "p" and portal is not None:
+            ask_portal_login(app, session, portal)
             return None
         if hotkey(key) == "f" and not xui:
             session.data["auto_finalize"] = not session.data.get("auto_finalize", False)
             return None
-        if hotkey(key) == "r" and free and item.fix_id == "self_steal" and not xui:
-            choose_reserve(app, session, items, item)
-            checklist.rows = rows()
-            checklist.selected = {i for i, item in enumerate(items) if item.selected}
-            return None
         if hotkey(key) == "a":
             mark_all()
+            follow_admin_key(items)
             return None
-        result = checklist.handle(key)
-        if result == "done":
-            needs = {"self_steal": "plan.need_domain", "cdn.edge_only": "plan.need_edges",
-                     "panel.portal": "plan.need_portal"}  # fmt: skip
-            for i, item in enumerate(items):
-                if i in checklist.selected and waits_for_input(item):
-                    state["error"] = t(needs[item.fix_id])
+        if key == "enter":
+            for chosen in items:
+                if chosen.selected and not chosen.blocked and waits_for_input(chosen):
+                    state["error"] = t(NEEDS[chosen.fix_id])
                     return None
-            for item in items:
-                if item.fix_id == "reserve" and item.selected and not pair_ready(items, item):
+            for chosen in items:
+                if chosen.fix_id == "reserve" and chosen.selected and not pair_ready(items, chosen):
                     state["error"] = t("plan.need_reserve")
                     return None
-            return "consent" if checklist.selected else None
+            return "consent" if any(i.selected and not i.blocked for i in items) else None
+        listing.handle(key)
         return None
 
     def keys() -> list[tuple[str, str]]:
         """The footer follows the current row: its own keys first, the rest in `?`."""
-        item = current()
+        row = current()
         hints: list[tuple[str, str]] = []
-        if item is not None and not item.blocked and item.fix_id == "self_steal":
-            hints.append(("d", t("keys.domain")))
-            if not xui:
-                hints.append(("r", t("keys.reserve")))
-            hints.append(("g", t("keys.site")))
-        elif item is not None and not item.blocked and item.fix_id == "cdn.edge_only":
-            hints.append(("e", t("keys.edges")))
-        elif item is not None and not item.blocked and item.fix_id == "panel.portal":
-            hints.append(("p", t("keys.portal")))
-        hints.append((t("keys.space"), t("keys.toggle")))
-        if len(hints) == 1:
+        if row is not None and row.kind == "domain":
+            if not items[row.indexes[0]].blocked:
+                hints.append(("d", t("keys.domain")))
+                if not xui:
+                    hints.append(("r", t("keys.reserve")))
+                hints.append(("g", t("keys.site")))
+            hints.append((t("keys.space"), t("keys.toggle")))
+        elif row is not None:
+            if input_item(row, "cdn.edge_only") is not None:
+                hints.append(("e", t("keys.edges")))
+            if input_item(row, "panel.portal") is not None:
+                hints.append(("p", t("keys.portal")))
+            if row.kind == "group":
+                hints.append((t("keys.space"), t("keys.toggle_group")))
+                opened = row.group in expanded
+                hints.append(
+                    (
+                        "←" if opened else "→",
+                        t("keys.close_group") if opened else t("keys.open_group"),
+                    )
+                )
+            else:
+                hints += [(t("keys.space"), t("keys.toggle")), ("←", t("keys.close_group"))]
+        if len(hints) <= 2:
             hints.append(("a", t("keys.all_but_port")))
         return hints + [("Enter", t("keys.next")), ("Esc", t("keys.back")),
                         ("?", t("keys.help"))]  # fmt: skip
@@ -627,8 +825,6 @@ def step_plan(app: App, session: Session) -> Any:
         while True:
             if app.interact(t("plan.title"), body, keys, handle, timeout=1, tick=tick) == BACK:
                 return BACK
-            for i, item in enumerate(items):
-                item.selected = i in checklist.selected
             follow_admin_key(items)
             if consent(app, session, items):
                 return NEXT
@@ -642,30 +838,84 @@ def agree(app: App, title: str, widget: Consent) -> bool:
     return bool(app.interact(title, widget, (), widget.handle, typing=True))
 
 
-def consent(app: App, session: Session, items: list[PlanItem]) -> bool:
-    """§6 S7: what changes on every node, the warnings of §15 word for word."""
-    chosen = [i for i in items if i.selected and not i.blocked]
-    lines: list[RenderableType] = [Text(t("consent.intro"), style="bold")]
-    by_node: dict = {}
+def area_changes(app: App, session: Session, chosen: list[PlanItem]) -> list[tuple[str, str]]:
+    """What changes in each area, in words: the measures with their nodes (K23)."""
+    xui = session.snapshot.kind == "3x-ui"
+    by_area: dict[str, list[PlanItem]] = {}
     for item in chosen:
-        by_node.setdefault(node_name(session, item.target, item.params), []).append(
-            fix_label(app, item)
-        )
-    for name, labels in by_node.items():
-        lines.append(Hanging(f"  {app.mask(name)}: " + "; ".join(labels), indent=4))
+        by_area.setdefault(area_of(item.fix_id), []).append(item)
+    result = []
+    for area in sorted(by_area, key=area_order):
+        found = by_area[area]
+        parts = []
+        if area == "domain":
+            steals = [i for i in found if i.fix_id == "self_steal"]
+            if steals:
+                domains = ", ".join(f"{app.mask(i.params.get('domain') or '…')} "
+                                    f"({app.mask(app.session_name(i.node_uuid))})"
+                                    for i in steals)  # fmt: skip
+                parts.append(t("consent.domain.xui" if xui else "consent.domain", domains=domains))
+            for pair in (i for i in found if i.fix_id == "reserve"):
+                parts.append(
+                    app.mask(
+                        t(
+                            "consent.reserve",
+                            main=app.session_name(pair.node_uuid),
+                            spare=app.session_name(pair.params["reserve"]),
+                        )
+                    )
+                )
+        else:
+            for fix_id in dict.fromkeys(i.fix_id for i in found):
+                same = [i for i in found if i.fix_id == fix_id]
+                if fix_id == "ssh.port":
+                    ports = ", ".join(f"{app.mask(app.session_name(i.node_uuid))} → "
+                                      f"{i.params.get('port')}" for i in same)  # fmt: skip
+                    parts.append(f"{fix_short(fix_id)}: {ports}")
+                elif fix_id == "ports.drop":
+                    ports = ", ".join(f"{app.mask(app.session_name(i.node_uuid))} "
+                                      f"({', '.join(i.params.get('ports', []))})"
+                                      for i in same)  # fmt: skip
+                    parts.append(f"{fix_short(fix_id)}: {ports}")
+                else:
+                    parts.append(f"{fix_short(fix_id)} ({targets_where(app, session, same)})")
+        result.append((area_title(area), "; ".join(parts)))
     for item in chosen:
         renewals = node_renewals(session, item.target) if item.fix_id == "self_steal" else []
         if renewals:
             name = app.mask(node_name(session, item.target, item.params))
-            lines.append(
-                Hanging(
-                    "  " + t("consent.renewals", node=name, names=renewals_text(app, renewals)),
-                    indent=4,
-                )
-            )
-    for text in consent_warnings(app, session, chosen):
-        lines.append(Notice("warning", text))
-    return agree(app, t("consent.title"), Consent(Group(*lines), t("consent.accept")))
+            result.append(("", t("consent.renewals", node=name,
+                                 names=renewals_text(app, renewals))))  # fmt: skip
+    return result
+
+
+def consent(app: App, session: Session, items: list[PlanItem]) -> bool:
+    """§6 S7: what changes in every area, then the warnings of §15 word for word (K23)."""
+    chosen = [i for i in items if i.selected and not i.blocked]
+    table = Table.grid(padding=(0, 2))
+    table.add_column(no_wrap=True, style="bold")
+    table.add_column(ratio=1)
+    for area, words in area_changes(app, session, chosen):
+        table.add_row(area, words)
+    parts: list[RenderableType] = [
+        Panel(
+            table,
+            title=Text(f" {t('consent.block.what')} ", style="bold"),
+            title_align="left",
+            subtitle=Text(f" {t('consent.block.what.note', n=len(chosen))} ", style="muted"),
+            subtitle_align="right",
+            box=box.ROUNDED,
+            border_style="muted",
+        )  # fmt: skip
+    ]
+    warnings = consent_warnings(app, session, chosen)
+    if warnings:
+        bullets = [Hanging(f"• {text}", indent=2) for text in warnings]
+        title = bold(f" {t('consent.block.warnings')} ", "risk.medium")
+        parts.append(Panel(Group(*bullets), title=title, title_align="left", box=box.ROUNDED,
+                           border_style="risk.medium"))  # fmt: skip
+    parts.append(Text(t("consent.backup"), style="muted"))
+    return agree(app, t("consent.title"), Consent(Group(*parts), t("consent.accept")))
 
 
 # -- S8 -------------------------------------------------------------------------
@@ -844,42 +1094,34 @@ def applied(change: dict) -> bool:
     return change["state"] in ("applied", "confirmed") and not rollback_failed(change)
 
 
-def change_lines(app: App, session: Session, run: dict) -> list[RenderableType]:
-    lines: list[RenderableType] = []
-    for change in run["changes"]:
+def change_texts(app: App, session: Session, changes: list[dict]) -> list[Text]:
+    """The changes of an area, a line each, with what a person needs from them: the
+    stub site, the renewals moved to nginx, the host copies, the new host keys."""
+    lines: list[Text] = []
+    for change in changes:
         name = app.mask(node_name(session, change["target"], change["params"]))
-        label = fix_label(app, change)
-        if rollback_failed(change):
-            reason = error_text(change["details"].get("failure"))
-            lines.append(Hanging(f"✗ {name}: {label}. " + t("apply.rollback_failed", reason=reason),
-                                 style="risk.high"))  # fmt: skip
-        elif applied(change):
-            lines.append(Hanging(f"✓ {name}: {label}", style="ok"))
-        else:
-            reason = error_text(change.get("error"))
-            lines.append(Hanging(f"↺ {name}: {label}. " + t("apply.rolled_back", reason=reason),
-                                 style="risk.high"))  # fmt: skip
-        site = change["details"].get("site")
-        if change["fixId"] == "self_steal.site" and applied(change) and site:
-            lines.append(Hanging("  " + t("s9.site", title=site["title"],
-                                          kind=t(f"site.kind.{site['kind']}"),
-                                          background=site["background"],
-                                          accent=site["accent"]), indent=4,
-                                 style="muted"))  # fmt: skip
-        renewals = change["details"].get("renewals")
-        if change["fixId"] == "self_steal.site" and applied(change) and renewals:
-            lines.append(Hanging("  " + t("s9.renewals", names=renewals_text(app, renewals)),
-                                 indent=4, style="muted"))  # fmt: skip
-        if change["fixId"] == "self_steal.hosts" and applied(change):
-            lines.append(Hanging("  " + t("s9.hosts", created=len(change["details"]["created"]),
-                                          disabled=len(change["details"]["disabled"])),
-                                 indent=4, style="muted"))  # fmt: skip
-        for key in change["details"].get("hostKeys", []) if applied(change) else []:
+        lines.append(Text(f"✓ {name}: {fix_label(app, change)}", style="ok"))
+        details = change["details"]
+        site = details.get("site")
+        if change["fixId"] == "self_steal.site" and site:
+            lines.append(Text("  " + t("s9.site", title=site["title"],
+                                       kind=t(f"site.kind.{site['kind']}"),
+                                       background=site["background"], accent=site["accent"]),
+                              style="muted"))  # fmt: skip
+        renewals = details.get("renewals")
+        if change["fixId"] == "self_steal.site" and renewals:
+            lines.append(Text("  " + t("s9.renewals", names=renewals_text(app, renewals)),
+                              style="muted"))  # fmt: skip
+        if change["fixId"] == "self_steal.hosts":
+            hosts = t("s9.hosts", created=len(details["created"]),
+                      disabled=len(details["disabled"]))  # fmt: skip
+            lines.append(Text("  " + hosts, style="muted"))
+        for key in details.get("hostKeys", []):
             if key.get("type") == "ED25519":
                 node = session.snapshot.node(change["target"].partition(":")[2])
-                lines.append(Hanging("  " + t("s9.hostkey", fingerprint=key["fingerprint"],
-                                              address=app.mask(node.address if node else "")),
-                                     indent=4, style="muted"))  # fmt: skip
+                lines.append(Text("  " + t("s9.hostkey", fingerprint=key["fingerprint"],
+                                           address=app.mask(node.address if node else "")),
+                                  style="muted"))  # fmt: skip
     return lines
 
 
@@ -897,47 +1139,38 @@ def apply_summary(run: dict, findings: list) -> list[RenderableType]:
         line.append(" " + t("s9.rollback_failed", n=stuck), style="risk.high")
     numbers = counts(findings, {n["uuid"]: n["name"] for n in run["nodes"]})
     if numbers["problems"]:
-        left = Text(t("s9.left", **numbers), style="bold")
+        left = Text(t("s9.left.line", **numbers), style="bold")
     else:
         left = Text(f"✓ {t('s6.none')}", style="ok")
     return [line, left]
 
 
-def new_ports(
-    app: App, session: Session, run: dict, compact: bool = False
-) -> Optional[RenderableType]:
-    """§10.3: the new SSH port stands out, with how to log in now; in a low terminal
-    without the frame, which would take two lines from the list."""
-    admin = app.env.state is not None and app.env.state.admin_key.exists()
-    lines: list[RenderableType] = []
+def save_lines(app: App, session: Session, run: dict) -> list[Text]:
+    """§10.3, §10.10: the new ways in stand out, a line a node with the command to log
+    in now; the new link to the panel; the nodes whose host keys changed."""
+    lines: list[Text] = []
     for change in run["changes"]:
         if change["fixId"] != "ssh.port" or change["state"] != "confirmed":
             continue
-        if rollback_failed(change):
-            continue
         node = session.snapshot.node(change["target"].partition(":")[2])
-        if node is None:
+        if node is None or rollback_failed(change):
             continue
-        port = change["details"].get("newPort")
-        name = app.mask(node.name)
-        command = f"ssh -p {port} root@{app.mask(node.address)}"
-        lines.append(Text(t("s9.ssh_port", node=name, port=port), style="accent"))
-        # `kerberos ssh` works only with the administrator key on this server (§8.5).
-        key = "s9.login.admin" if admin else "s9.login"
-        lines.append(Text(t(key, command=command, node=name), style="bold"))
+        command = f"ssh -p {change['details'].get('newPort')} root@{app.mask(node.address)}"
+        lines.append(Text(t("s9.save.ssh", node=app.mask(node.name), command=command),
+                          style="bold"))  # fmt: skip
     lines += panel_links(app, run)
-    if not lines:
-        return None
-    if compact:
-        return Group(*lines)
-    return Panel(Group(*lines), box=box.HEAVY, border_style="accent", expand=False)
+    renewed = [app.mask(node_name(session, c["target"], c["params"])) for c in run["changes"]
+               if c["fixId"] == "hostkeys.regenerate" and applied(c)]  # fmt: skip
+    if renewed:
+        lines.append(Text(t("s9.save.hostkeys", nodes=", ".join(renewed)), style="muted"))
+    return lines
 
 
-def panel_links(app: App, run: dict) -> list[RenderableType]:
+def panel_links(app: App, run: dict) -> list[Text]:
     """§10.10: the new way into the panel stands out like a new SSH port."""
     from kerberos.fixes.panel_changes import load_snapshot
 
-    lines: list[RenderableType] = []
+    lines: list[Text] = []
     for change in run["changes"]:
         if change["fixId"] not in ("panel.portal", "xui.panel_hide"):
             continue
@@ -955,14 +1188,102 @@ def panel_links(app: App, run: dict) -> list[RenderableType]:
     return lines
 
 
-def command_lines(label: str, command: str) -> list[RenderableType]:
-    """A command to copy: on a line of its own, so the label never pushes it to a
-    break (it folds only when longer than the whole screen)."""
-    return [Text(label, style="bold"), Text(command, overflow="fold")]
+def framed(title: str, lines: list[RenderableType], style: str, note: str = "",
+           compact: bool = False) -> RenderableType:  # fmt: skip
+    """A pinned block of S9; in a low terminal its title line without the frame."""
+    if compact:
+        tail = [Text(note, style="muted")] if note else []
+        return Group(bold(title, style), *lines, *tail)
+    return Panel(Group(*lines), title=bold(f" {title} ", style), title_align="left",
+                 subtitle=Text(f" {note} ", style="muted") if note else None,
+                 subtitle_align="right", box=box.ROUNDED, border_style=style)  # fmt: skip
 
 
-# S9 pins more than S6 (the new SSH ports, two commands): its score shrinks to a line
-# sooner, so the list of changes keeps room on a 30-line terminal too.
+DONE_COLUMNS = [Column(most=1), Column(most=20), Column(flex=1, least=16),
+                Column(most=18, least=6)]  # fmt: skip
+FAILED_COLUMNS = [Column(most=1), Column(flex=1, least=16)]
+
+
+def done_blocks(app: App, session: Session, run: dict, findings: list) -> list[Block]:
+    """What did not apply, what KERBEROS did a row an area, what is left to the person."""
+    from kerberos.report.view import report_blocks
+
+    blocks = []
+    failed = []
+    for change in run["changes"]:
+        if applied(change):
+            continue
+        name = app.mask(node_name(session, change["target"], change["params"]))
+        if rollback_failed(change):
+            reason = t("apply.rollback_failed", reason=error_text(change["details"].get("failure")))
+            symbol = SYMBOL_FAIL
+        else:
+            reason = t("apply.rolled_back", reason=error_text(change.get("error")))
+            symbol = SYMBOL_ROLLED_BACK
+        # The reason under the name, not beside it: a sentence needs the whole width.
+        what = Text(f"{name}: {fix_label(app, change)}\n")
+        what.append(reason, style="risk.high")
+        failed.append(BlockRow([Text(symbol, style="risk.high"), what]))
+    if failed:
+        blocks.append(Block(t("s9.block.failed"), failed, FAILED_COLUMNS, "risk.high",
+                            str(len(failed))))  # fmt: skip
+    by_area: dict[str, list[dict]] = {}
+    for change in run["changes"]:
+        if applied(change):
+            by_area.setdefault(area_of(change["fixId"]), []).append(change)
+    rows = []
+    for area in sorted(by_area, key=area_order):
+        changes = by_area[area]
+        nodes, others = [], []
+        for change in changes:
+            name = app.mask(node_name(session, change["target"], change["params"]))
+            kind = change["target"].partition(":")[0]
+            (nodes if kind == "node" or change["params"].get("node") else others).append(name)
+        domains = [
+            app.mask(c["params"]["domain"])
+            for c in changes
+            if c["fixId"] in ("self_steal.site", "xui.reality") and c["params"].get("domain")
+        ]
+        if area == "domain" and domains:
+            measures = joined(domains, 3)  # which names the nodes answer to now
+        else:
+            measures = joined([fix_short(c["fixId"]) for c in changes], 4)
+        rows.append(BlockRow([Text(SYMBOL_OK, style="ok"), Text(area_title(area), style="bold"),
+                              Text(measures), Text(where(nodes, others), style="muted")],
+                             change_texts(app, session, changes), key=("done", area)))  # fmt: skip
+    if rows:
+        blocks.append(Block(t("s9.block.done"), rows, DONE_COLUMNS, "ok", t("s9.block.done.note")))
+    names = {n["uuid"]: n["name"] for n in run["nodes"]}
+    for block in report_blocks(findings, names, app.mask, parts=("manual",)):
+        block.title = t("s9.block.left")
+        blocks.append(block)
+    return blocks
+
+
+def next_lines(app: App, run: dict, path: str) -> list[RenderableType]:
+    """Finalization, rollback and the report: a command on a line of its own, so the
+    label never pushes it to a break (it folds only when longer than the screen)."""
+    lines: list[RenderableType] = []
+    if run.get("pending"):
+        # «Automatically» only when the timer is really set (§10.4 step 6).
+        if run.get("finalizeTimer"):
+            lines.append(Text(t("s9.finalize.auto"), style="accent"))
+        else:
+            lines += [
+                Text(t("s9.finalize"), style="bold"),
+                Text(f"sudo {launcher()} finalize {run['runId']}", overflow="fold"),
+            ]
+    if run["changes"]:
+        lines += [
+            Text(t("done.rollback"), style="bold"),
+            Text(rollback_command(run["runId"]), overflow="fold"),
+        ]
+    lines.append(Text(t("report.saved", path=app.mask(path)), style="muted", overflow="fold"))
+    return lines
+
+
+# S9 pins more than S6 (the score, the new ways in, the commands): its blocks lose their
+# frames sooner, so the list of changes keeps room on a 30-line terminal too.
 S9_COMPACT_BELOW = COMPACT_BELOW + 8
 
 
@@ -974,36 +1295,39 @@ def step_done(app: App, session: Session) -> Any:
     after = session.data.get("findings_after", session.data["findings"])
     cancelled = engine is not None and engine.cancelled
     title = t("apply.interrupted.title") if cancelled else t("done.title")
-    listing = Pager("")
+    listing = BlockList()
 
     def body(_w: int, height: int) -> RenderableType:
         compact = height < S9_COMPACT_BELOW
-        top: list[RenderableType] = [
-            report_header(app, after, run.get("scoreAfter") or run["scoreBefore"],
-                          run["scoreBefore"], without, path,
-                          summary=apply_summary(run, after), compact=compact),
-        ]  # fmt: skip
+        summary = apply_summary(run, after)
+        if without:
+            summary.append(Text(t("s6.no_access", nodes=app.mask("; ".join(without))),
+                                style="muted"))  # fmt: skip
+        value = run.get("scoreAfter") or run["scoreBefore"]
+        if compact:
+            top: list[RenderableType] = [ScoreBadge(value, run["scoreBefore"], compact=True),
+                                         *summary]  # fmt: skip
+        else:
+            grid = Table.grid(padding=(0, 2))
+            grid.add_column(no_wrap=True)
+            grid.add_column(ratio=1)
+            grid.add_row(ScoreBadge(value, run["scoreBefore"]), Group(*summary))
+            top = [grid]
         if cancelled:
             top.append(Notice("warning", t("apply.interrupted")))
-        ports = new_ports(app, session, run, compact)
-        if ports is not None:
-            top.append(ports)
-        if not compact:
-            top.append(Text(""))
-        lines = change_lines(app, session, run)
-        listing.text = Group(*(lines or [Text(t("s9.none"), style="muted")]))
-        bottom: list[RenderableType] = []
-        if run.get("pending"):
-            # «Automatically» only when the timer is really set (§10.4 step 6).
-            if run.get("finalizeTimer"):
-                bottom += [Text(t("s9.finalize.auto"), style="accent")]
-            else:
-                command = f"sudo {launcher()} finalize {run['runId']}"
-                bottom += command_lines(t("s9.finalize"), command)
-        if run["changes"]:
-            bottom += command_lines(t("done.rollback"), rollback_command(run["runId"]))
-        if bottom and not compact:
-            bottom.insert(0, Text(""))
+        saves = save_lines(app, session, run)
+        if saves:
+            admin = app.env.state is not None and app.env.state.admin_key.exists()
+            # `kerberos ssh` works only with the administrator key on this server (§8.5).
+            note = t("s9.save.kerberos_ssh") if admin and any(
+                c["fixId"] == "ssh.port" for c in run["changes"]) else ""  # fmt: skip
+            top.append(framed(t("s9.block.save"), saves, "accent", note, compact))
+        listing.blocks = done_blocks(app, session, run, after)
+        bottom = [framed(t("s9.block.next"), next_lines(app, run, path), "muted",
+                         compact=compact)]  # fmt: skip
+        if not listing.blocks:
+            listing.blocks = [Block(t("s9.block.done"), [BlockRow([Text(""), Text(t("s9.none"))])],
+                                    [Column(most=1), Column(flex=1)], "muted")]  # fmt: skip
         return Stack(*top, listing, *bottom, flex=len(top))
 
     def handle(key: str) -> Optional[str]:
@@ -1015,8 +1339,9 @@ def step_done(app: App, session: Session) -> Any:
         listing.handle(key)
         return None
 
-    keys = (("↑↓ PgDn", t("keys.scroll")), ("s", t("keys.full_report")),
-            ("Enter", t("keys.menu")), ("?", t("keys.help")))  # fmt: skip
+    keys = (("↑↓ PgDn", t("keys.scroll")), (t("keys.space"), t("keys.details")),
+            ("s", t("keys.full_report")), ("Enter", t("keys.menu")),
+            ("?", t("keys.help")))  # fmt: skip
     app.screen_help = t("help.s9")
     try:
         app.interact(title, body, keys, handle)

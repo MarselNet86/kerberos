@@ -2,7 +2,7 @@
 
 import random
 
-from helpers import login_keys, make_app, row_of, seen
+from helpers import login_keys, make_app, on, seen
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -18,11 +18,9 @@ TO_PLAN += ["enter", "enter", "enter"]
 
 def all_and_ports(*names):
     """`a` marks everything but the SSH ports (§6): those the person marks by hand."""
-    keys, cursor = ["a"], 0
+    keys = ["a"]
     for name in names:
-        row = row_of(name, "ssh.port")
-        keys += ["down"] * (row - cursor) + ["space"]
-        cursor = row
+        keys += on(name, "ssh.port", "space")
     return keys + ["enter", "enter"]  # consent, accept
 
 
@@ -55,7 +53,7 @@ def test_new_port_after_login_on_it_old_one_closed():
     ]
     assert confirms == [f"confirm {change['changeId']} (fresh)"]
     assert seen(term, t("fix.ssh_port.warning", port=port))
-    assert seen(term, t("s9.ssh_port", node="nl-1", port=port))
+    assert seen(term, t("s9.save.ssh", node="nl-1", command=f"ssh -p {port} root@203.0.113.10"))
     report = RunStore(app.env.state, app.env.clock).report_text(
         RunStore(app.env.state, app.env.clock).runs()[0]["runId"]
     )

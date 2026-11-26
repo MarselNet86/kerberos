@@ -21,8 +21,9 @@ TO_REPORT = CHOOSE + LOGIN + ["enter", "enter"]  # S2 summary, S4 summary (S3 is
 TO_PLAN = TO_REPORT + ["enter"]
 # «Проверка»: S4 first says what it installs on this server.
 CHECK_REPORT = CHOOSE + LOGIN + ["enter", "enter", "enter"]
-# S7 rows of the demo server: mptcp, fail2ban, ports, key only, ssh port, self-steal, watch.
-PORT_ROW, STEAL_ROW = 4, 5
+# S7 rows of the demo server (K23), groups folded: the access to the server, the new SSH
+# port, the holes for scanners, the panel, watch; then its own domain, the last row.
+TO_PORT, TO_STEAL = ["home", "down"], ["end"]
 APPLY = ["enter", "enter"]
 ROLLBACK = ["enter", "enter", "enter"] + LOGIN + ["x"]
 
@@ -45,7 +46,7 @@ def local_node(app):
 
 
 def steal(domain=XUI_DOMAIN):
-    return ["down"] * STEAL_ROW + ["d"] + list(domain) + ["enter"]
+    return TO_STEAL + ["d"] + list(domain) + ["enter"]
 
 
 def test_choice_of_panel_then_check():
@@ -119,7 +120,7 @@ def test_finalize_leaves_only_the_domain():
 
 @pytest.mark.parametrize("answer, code", [("enter", EXIT_OK), ("esc", EXIT_PARTIAL)])
 def test_new_ssh_port_is_tried_from_outside(answer, code):
-    keys = TO_PLAN + ["down"] * PORT_ROW + ["space"] + APPLY + [answer, "enter"]
+    keys = TO_PLAN + TO_PORT + ["space"] + APPLY + [answer, "enter"]
     app, term = xui_app(keys)
     assert app.run("fix") == code
     change = next(c for c in last_run(app)["changes"] if c["fixId"] == "ssh.port")

@@ -29,8 +29,9 @@ from kerberos.host import CommandResult, FakeHost
 from kerberos.panel.discover import XUI_BIN, XUI_DB
 
 LOGIN, PASSWORD = "portaladmin7", "portal-pass-123"
-# `a` twice clears the marks; the cursor stops at the last row, the portal's.
-ONLY_LAST_ROW = ["a", "a"] + ["down"] * 60
+# `a` twice clears the marks; then the group «Вход в панель» (K23): after the access to
+# the servers, the new SSH port and the holes for scanners, on both panels.
+ONLY_LAST_ROW = ["a", "a", "home"] + ["down"] * 3
 CREDS = ["p"] + typed(LOGIN) + ["enter"] + typed(PASSWORD) + ["enter"] + typed(PASSWORD)
 CREDS += ["enter"]
 APPLY = ["enter", "enter"]  # S7 → consent, accept
@@ -168,8 +169,8 @@ def test_the_portal_row_is_never_marked_by_default_or_by_a():
     app, term = make_app(TO_PLAN + ["a", "esc", "q", "enter"], host=host, height=46)
     FakeCaddy(host, app.env.prober)
     app.run("fix")
-    rows = [line for frame in term.frames for line in frame.splitlines()
-            if t("fix.panel.portal.label") in line]  # fmt: skip
+    rows = [line for frame in term.frames if t("plan.title") in frame.splitlines()[0]
+            for line in frame.splitlines() if t("area.panel_login") in line]  # fmt: skip
     assert rows and all("[ ]" in line for line in rows), "unmarked by default and after `a`"
 
 
@@ -337,8 +338,8 @@ def test_xui_panel_row_is_never_marked_by_default_or_by_a():
     keys = XUI_TO_PLAN + ["a", "esc", "q", "enter"]
     app, term = make_app(keys, panel_kind=None, height=44)
     app.run("fix")
-    rows = [line for frame in term.frames for line in frame.splitlines()
-            if t("fix.xui.panel_hide.label") in line]  # fmt: skip
+    rows = [line for frame in term.frames if t("plan.title") in frame.splitlines()[0]
+            for line in frame.splitlines() if t("area.panel_login") in line]  # fmt: skip
     assert rows and all("[ ]" in line for line in rows)
 
 
@@ -417,7 +418,7 @@ def test_a_marks_no_portal_row_even_with_its_login():
     FakeCaddy(host, app.env.prober)
     app.run("fix")
     plan = [f for f in term.frames if t("plan.title") in f]
-    row = [line for line in plan[-1].splitlines() if t("fix.panel.portal.label") in line]
+    row = [line for line in plan[-1].splitlines() if t("area.panel_login") in line]
     assert row and "[✓]" in row[0], "`a` twice leaves the portal row as the person set it"
 
 
@@ -498,8 +499,8 @@ def test_findings_after_a_3x_ui_move_see_no_stray_old_port():
 def test_whole_rollback_on_3x_ui_after_a_panel_move_and_a_self_steal():
     from kerberos.demo.xui import XUI_DOMAIN
 
-    keys = XUI_TO_PLAN + ["a", "a"] + ["down"] * 5 + ["d"] + list(XUI_DOMAIN) + ["enter"]
-    keys += ["down"] * 30 + ["space"] + APPLY + ["enter", "enter"]
+    keys = XUI_TO_PLAN + ["a", "a", "end", "d"] + list(XUI_DOMAIN) + ["enter"]
+    keys += ONLY_LAST_ROW[2:] + ["space"] + APPLY + ["enter", "enter"]
     app, _term = make_app(keys, panel_kind=None, height=44)
     assert app.run("fix") == EXIT_OK
     run, _change = portal_change(app, "xui.panel_hide")

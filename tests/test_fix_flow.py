@@ -188,8 +188,9 @@ def test_s9_snapshot_and_s7_rows(monkeypatch):
     text = re.sub(r"SHA256:\S+", "SHA256:<new>", text)
     assert_snapshot("s9", text.replace(run["runId"], "<run>"))
     s7 = next(f for f in term.frames if t("plan.title") in f.splitlines()[0])
-    assert t("fix.mptcp.guard.label") in s7
-    # Not marked: ssh.port (4 nodes), self-steal waiting for a domain (4), host.fingerprint
-    # (low), watch.install (by choice, 2 nodes), cdn.edge_only waiting for its nets.
-    assert t("plan.selected", n=ALL_ITEMS, total=ALL_ITEMS + 12) in s7
+    assert t("area.scanners") in s7 and t("fix.mptcp.guard.short") in s7
+    # K23: the four own domains are a block of their own, waiting for a domain. Not marked
+    # in the groups: ssh.port (4 nodes), host.fingerprint (low), watch.install (by choice,
+    # 2 nodes), cdn.edge_only waiting for its nets.
+    assert t("plan.block.auto.note", n=ALL_ITEMS, total=ALL_ITEMS + 8) in s7
     assert len(plan_rows()) == ALL_ITEMS + 12

@@ -6,10 +6,12 @@ from rich.text import Text
 from kerberos.copy import t
 from kerberos.ui.terminal import FakeTerminal, frame_text, make_console
 from kerberos.ui.widgets import (
+    Block,
+    BlockList,
+    BlockRow,
     Checklist,
+    Column,
     Consent,
-    FindingItem,
-    FindingList,
     Menu,
     Notice,
     Pager,
@@ -126,26 +128,28 @@ def test_score_badge_words_and_colours():
     assert t("score.before_after", before=40, score=85) in render(ScoreBadge(85, before=40))
 
 
-def test_finding_list_groups_and_expands():
-    items = [
-        FindingItem(
-            "high",
-            "Тема 1",
-            "nl-1",
-            "Вход по паролю",
-            "Перебор",
-            "исправит KERBEROS",
-            details="sshd -T: passwordauthentication yes",
-        ),
-        FindingItem("medium", "Тема 2", "de-1", "Порт 22", "Сканеры", "вручную"),
+COLUMNS = [Column(most=10), Column(flex=1)]
+
+
+def test_block_list_frames_its_blocks_and_opens_details():
+    rows = [
+        BlockRow(
+            [Text("● высокий"), Text("Вход по паролю")],
+            [Text("sshd -T: passwordauthentication yes")],
+        ),  # fmt: skip
+        BlockRow([Text("● средний"), Text("Порт 22")]),
     ]
-    fl = FindingList(items)
-    frame = render(fl)
-    assert "Тема 1" in frame and "Тема 2" in frame and "sshd -T" not in frame
-    fl.handle("space")
-    assert "sshd -T" in render(fl)
-    fl.handle("down")
-    assert fl.cursor == 1
+    listing = BlockList([Block("✓ Блок 1", rows[:1], COLUMNS, note="1"),
+                         Block("✎ Блок 2", rows[1:], COLUMNS)])  # fmt: skip
+    frame = render(listing)
+    assert "✓ Блок 1" in frame and "✎ Блок 2" in frame and "sshd -T" not in frame
+    assert frame.splitlines()[0].startswith("╭─ ✓ Блок 1") and "─ 1 ─╯" in frame
+    listing.handle("space")
+    assert "sshd -T" in render(listing)
+    listing.handle("down")
+    assert listing.cursor == 1 and listing.current() is rows[1]
+    listing.handle("space")  # no details: nothing opens
+    assert listing.expanded == {0}
 
 
 def test_notice_has_a_word_title():

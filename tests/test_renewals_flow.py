@@ -11,8 +11,8 @@ from helpers import seen
 from test_xui_flow import (
     APPLY,
     ROLLBACK,
-    STEAL_ROW,
     TO_PLAN,
+    TO_STEAL,
     last_run,
     local_node,
     reality,
@@ -41,7 +41,8 @@ def test_plan_and_consent_say_which_renewals_move():
 
 
 def test_s9_report_and_run_name_the_moved_renewals():
-    app, term = xui_app(TO_PLAN + steal() + APPLY + ["enter"])
+    # S9 (K23): Space opens «Свой домен», the first area KERBEROS changed.
+    app, term = xui_app(TO_PLAN + steal() + APPLY + ["space", "enter"])
     assert app.run("fix") == EXIT_OK
     run = last_run(app)
     site = next(c for c in run["changes"] if c["fixId"] == "self_steal.site")
@@ -72,7 +73,7 @@ def test_nginx_without_the_probe_rolls_self_steal_back():
 
 
 def test_a_renewal_that_cannot_move_blocks_self_steal():
-    keys = TO_PLAN + ["down"] * STEAL_ROW + ["esc", "q", "enter"]  # the row, its details, out
+    keys = TO_PLAN + TO_STEAL + ["esc", "q", "enter"]  # the row, its details, out
     app, term = xui_app(keys)
     local_node(app).state["facts"]["acme"][0]["blocked"] = "cli.ini"
     app.run("fix")

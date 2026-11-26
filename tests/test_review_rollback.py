@@ -2,7 +2,7 @@
 a run, the SSH transport and S4 picking the node address."""
 
 import pytest
-from helpers import login_keys, make_app, row_of, seen, typed
+from helpers import login_keys, make_app, on, seen, typed
 
 from kerberos.copy import t
 from kerberos.demo.fleet import build_nodes
@@ -18,11 +18,9 @@ DEFAULT_APPLY = ["enter", "enter", "enter"]  # S7 → consent → accept, S9
 
 def everything(*names):
     """`a` marks every row but the SSH ports (§6): the port rows are marked by hand."""
-    keys, cursor = ["a"], 0
+    keys = ["a"]
     for name in names:
-        row = row_of(name, "ssh.port")
-        keys += ["down"] * (row - cursor) + ["space"]
-        cursor = row
+        keys += on(name, "ssh.port", "space")
     return keys + ["enter", "enter", "enter"]  # consent, accept, S9
 
 
@@ -166,11 +164,11 @@ def test_old_port_closed_at_the_hoster_keeps_the_new_port():
 # 3x-ui (§7.6): KERBEROS reaches this server on 127.0.0.1 and cannot see the hoster's firewall.
 XUI_LOGIN = typed("admin") + ["enter"] + typed("pw") + ["enter"]
 XUI_PLAN = ["down", "enter"] + XUI_LOGIN + ["enter", "enter", "enter"]
-XUI_PORT_ROW = 4
+XUI_PORT = ["home", "down"]  # the group «Новый порт SSH» of S7 (K23)
 
 
 def xui_with_new_port():
-    keys = XUI_PLAN + ["down"] * XUI_PORT_ROW + ["space", "enter", "enter", "enter", "enter"]
+    keys = XUI_PLAN + XUI_PORT + ["space", "enter", "enter", "enter", "enter"]
     app, term = make_app(keys, panel_kind=None, height=44)
     app.run("fix")
     change = next(c for c in last_run(app)["changes"] if c["fixId"] == "ssh.port")
@@ -205,7 +203,7 @@ def test_xui_port_whose_recheck_fails_is_tried_on_the_old_port_from_outside(answ
     from kerberos.nodes.transport import TransportError
 
     # Space marks the port, consent, accept, «the new port works», then the old port.
-    keys = XUI_PLAN + ["down"] * XUI_PORT_ROW + ["space", "enter", "enter", "enter", answer]
+    keys = XUI_PLAN + XUI_PORT + ["space", "enter", "enter", "enter", answer]
     app, term = make_app(keys + ["enter", "enter"], panel_kind=None, height=44)
     real = app.env.transport.agent
     armed = {"on": False, "done": False}

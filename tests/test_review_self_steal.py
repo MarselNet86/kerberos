@@ -3,7 +3,7 @@
 import json
 from types import SimpleNamespace
 
-from helpers import make_app, seen, typed
+from helpers import make_app, on, seen, typed
 from test_review_logic import (
     APPLY,
     DONE,
@@ -37,7 +37,7 @@ from kerberos.panel.xui_fake import raw_inbound
 X_TO_REPORT = ["down", "enter"] + typed("admin") + ["enter"] + typed("pw") + ["enter"]
 X_TO_REPORT += ["enter", "enter"]
 X_TO_PLAN = X_TO_REPORT + ["enter"]
-X_STEAL = ["down"] * 5 + ["d"] + list(XUI_DOMAIN) + ["enter"]
+X_STEAL = ["end", "d"] + list(XUI_DOMAIN) + ["enter"]  # its own domain: the last row of S7
 
 
 def add_inbound(panel, name, inbound):
@@ -58,7 +58,7 @@ def logged_in(panel):
 
 def reserve_keys():
     keys = domain_keys(NL1, "nl-1.example.com") + ["r", "down", "enter"]  # nl-1 → nl-2
-    return keys + ["down"] * (NL2 - NL1) + ["d"] + list("nl-2.example.com") + ["enter"]
+    return keys + domain_keys(NL2, "nl-2.example.com")
 
 
 # -- app 2, app 12: a reserve pair links only two nodes that both moved to their domains -----
@@ -81,7 +81,7 @@ def test_reserve_is_refused_when_one_side_of_the_pair_failed():
 def test_a_reserve_cannot_get_its_own_reserve():
     panel, nodes = fleet()
     keys = domain_keys(NL1, "nl-1.example.com") + ["r", "down", "enter"]  # nl-1 → nl-2
-    keys += ["down"] * (NL2 - NL1) + ["r", "x"]  # r on nl-2: a notice, no menu
+    keys += on(NL2, "self_steal", "r", "x")  # r on nl-2: a notice, no menu
     app, term, _code = fix(keys + ["esc", "q", "enter"], panel, nodes)  # S7 → S6 → quit
     assert seen(term, t("plan.reserve.is_reserve", node="nl-2", main="nl-1"))
     pairs = [i for i in app.session.data["plan"] if i.fix_id == "reserve"]

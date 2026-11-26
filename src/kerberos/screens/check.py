@@ -2,7 +2,7 @@
 
 S5 reads the fleet without changing anything: agent facts, observation,
 sites, outside probes, whois only after consent. S6 shows the score and the
-findings by topic and saves the report; in «Проверка» this is the end.
+findings in blocks (K23) and saves the report; in «Проверка» this is the end.
 """
 
 from __future__ import annotations
@@ -22,9 +22,9 @@ from kerberos.fixes.journal import RunStore
 from kerberos.fixes.model import Run
 from kerberos.flow import BACK, NEXT
 from kerberos.report import markdown
-from kerberos.report.view import counts, finding_items, projected
+from kerberos.report.view import counts, projected, report_blocks
 from kerberos.ui.keys import hotkey
-from kerberos.ui.widgets import STEP_VIEW, FindingList, Menu, Notice, Pager, ScoreBadge, Stack
+from kerberos.ui.widgets import STEP_VIEW, BlockList, Menu, Notice, Pager, ScoreBadge, Stack
 
 if TYPE_CHECKING:
     from kerberos.app import App, Session
@@ -205,14 +205,18 @@ COMPACT_BELOW = 26
 
 def check_summary(findings: list, names: Optional[dict] = None, *,
                   hint: bool = False) -> list[RenderableType]:  # fmt: skip
-    """What was found, what KERBEROS fixes itself and the score after it (K22)."""
+    """What was found, what KERBEROS fixes itself with the score after it, what is
+    left to the person (K22, K23): the rows of the blocks below, counted."""
     numbers = counts(findings, names)
     if not numbers["problems"]:
         return [Text(f"✓ {t('s6.none')}", style="ok")]
-    line = Text(t("s6.summary", **numbers), style="bold")
+    lines: list[RenderableType] = [Text(t("s6.found", **numbers), style="bold")]
     if numbers["auto"]:
+        line = Text(t("s6.auto", **numbers), style="ok")
         line.append(t("s6.after", score=projected(findings)), style="bold")
-    lines: list[RenderableType] = [line]
+        lines.append(line)
+    if numbers["manual"]:
+        lines.append(Text(t("s6.manual", **numbers), style="risk.medium"))
     if hint and numbers["auto"]:
         lines.append(Text(t("s6.fix_hint"), style="accent"))
     return lines
@@ -258,14 +262,13 @@ def step_report(app: App, session: Session) -> Any:
     findings = session.data["findings"]
     run = session.data["run"]
     names = {n["uuid"]: n["name"] for n in run["nodes"]}
-    items = finding_items(findings, names, app.mask)
-    listing = FindingList(items)
+    listing = BlockList(report_blocks(findings, names, app.mask))
     path = str(RunStore(app.env.state, app.env.clock).path(run["runId"]) / "report.md")
     without = without_access(run)
     checking = session.mode == "check"
 
     def body(_w: int, height: int) -> RenderableType:
-        listing.items = finding_items(findings, names, app.mask)
+        listing.blocks = report_blocks(findings, names, app.mask)  # `m` masks it again
         head = report_header(app, findings, session.data["score"], None, without, path,
                              summary=check_summary(findings, names, hint=checking),
                              compact=height < COMPACT_BELOW)  # fmt: skip

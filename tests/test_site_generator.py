@@ -3,7 +3,7 @@
 import random
 
 from demo_input import demo_input
-from helpers import flat, login_keys, make_app, seen
+from helpers import flat, login_keys, make_app, on, seen
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -52,15 +52,6 @@ def test_plan_gives_each_node_its_own_site():
     assert len(steal) >= 2 and len(layouts) == len(steal) and not layouts & in_use
 
 
-def steal_row(name: str) -> int:
-    """Row of the node's self-steal in S7, counted the way the plan orders it."""
-    _env, data = demo_input()
-    items = build_plan(run_checks(data), data, MINE, {})
-    names = {node.node.uuid: node.node.name for node in data.nodes}
-    return next(k for k, item in enumerate(items)
-                if item.fix_id == "self_steal" and names[item.node_uuid] == name)  # fmt: skip
-
-
 def preview_of(frame: str) -> str:
     text = flat(frame)
     start = text.index(t("plan.site", node="nl-1", title="", kind="")[:12])
@@ -68,9 +59,8 @@ def preview_of(frame: str) -> str:
 
 
 def test_preview_g_and_report():
-    row = steal_row("nl-1")
-    keys = TO_PLAN + ["down"] * row + ["g", "d", *"nl-1.example.com", "enter"]
-    app, term = make_app(keys + ["enter", "enter", "enter"], height=46)
+    keys = TO_PLAN + on("nl-1", "self_steal", "g", "d", *"nl-1.example.com", "enter")
+    app, term = make_app(keys + ["enter", "enter", "space", "enter"], height=46)  # S9: Space
     app.run("fix")
     frames = [f for f in term.frames if t("plan.site.again") in flat(f)]
     previews = []
@@ -94,8 +84,8 @@ def test_preview_g_and_report():
 def test_demo_draws_the_same_sites():
     seeds = []
     for _ in range(2):
-        row = steal_row("nl-1")
-        app, _term = make_app(TO_PLAN + ["down"] * row + ["esc", "q", "enter"], height=46)
+        app, _term = make_app(TO_PLAN + on("nl-1", "self_steal") + ["esc", "q", "enter"],
+                              height=46)  # fmt: skip
         app.run("fix")
         plan = app.session.data["plan"]
         seeds.append(next(i.params["siteSeed"] for i in plan if i.fix_id == "self_steal"))

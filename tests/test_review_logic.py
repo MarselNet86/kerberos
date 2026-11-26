@@ -9,7 +9,7 @@ import json
 from urllib.parse import urlsplit
 
 import pytest
-from helpers import login_keys, make_app, row_of
+from helpers import login_keys, make_app, on
 
 from kerberos.demo.fleet import build_nodes, build_panel
 from kerberos.fixes.engine import ROLLBACKABLE
@@ -25,8 +25,7 @@ APPLY = ["enter", "enter"]  # S7 → consent → accept
 DONE = ["enter"]  # S9
 # The run, all its changes, consent, the panel login; the result notice comes after.
 ROLLBACK = ["enter", "enter", "enter"]  # run, changes, consent; the panel: the saved token
-NL1 = row_of("nl-1", "self_steal")
-NL2 = row_of("nl-2", "self_steal")
+NL1, NL2 = "nl-1", "nl-2"  # rows of the block «Свой домен» of S7 (K23)
 
 
 class Hooked:
@@ -53,8 +52,8 @@ class Died(BaseException):
     """The process ends here (SIGHUP when the SSH session drops)."""
 
 
-def domain_keys(row, name):
-    return ["down"] * row + ["d"] + list(name) + ["enter"]
+def domain_keys(node, name):
+    return on(node, "self_steal", "d", *name, "enter")
 
 
 def fleet():
@@ -262,7 +261,7 @@ def fail_facts_after(app, is_trigger):
 
 def test_ssh_port_rolled_back_after_its_recheck_moves_kerberos_back():
     panel, nodes = fleet()
-    keys = ["down"] * row_of("nl-1", "ssh.port") + ["space"] + APPLY + DONE
+    keys = on("nl-1", "ssh.port", "space") + APPLY + DONE
     app, _term = make_app(TO_PLAN + keys, panel=panel, nodes=list(nodes.values()), height=46)
     fail_facts_after(app, lambda target, _c: target.address == "203.0.113.10" and target.port != 22)
     app.run("fix")

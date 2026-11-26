@@ -2,7 +2,7 @@
 
 import json
 
-from helpers import login_keys, make_app, row_of, seen
+from helpers import login_keys, make_app, on, seen
 
 from kerberos.checks import spec
 from kerberos.copy import t
@@ -14,12 +14,11 @@ from kerberos.flow import EXIT_OK, EXIT_PARTIAL, EXIT_ROLLBACK_FAILED
 
 TO_PLAN = login_keys() + ["enter", "enter"] + ["enter"] * 5 + ["esc"] + ["enter", "enter"]
 TO_PLAN += ["enter", "enter", "enter"]
-NL1_SELF_STEAL = row_of("nl-1", "self_steal")
-NL2_SELF_STEAL = row_of("nl-2", "self_steal")
+NL1_SELF_STEAL, NL2_SELF_STEAL = "nl-1", "nl-2"  # rows of the block «Свой домен» (K23)
 
 
-def domain_keys(row, domain):
-    return ["down"] * row + ["d"] + list(domain) + ["enter"]
+def domain_keys(node, domain):
+    return on(node, "self_steal", "d", *domain, "enter")
 
 
 def fleet(panel=None, nodes=None):
@@ -261,8 +260,7 @@ def test_unattended_finalization_without_a_saved_token_waits_for_the_person():
 def test_two_nodes_get_different_stub_sites():
     panel, nodes = fleet()
     keys = domain_keys(NL1_SELF_STEAL, "nl-1.example.com")
-    keys += ["down"] * (NL2_SELF_STEAL - NL1_SELF_STEAL) + ["d"] + list("nl-2.example.com")
-    keys += ["enter"] + APPLY
+    keys += domain_keys(NL2_SELF_STEAL, "nl-2.example.com") + APPLY
     app, _term, code = run_fix(keys, panel, nodes)
     assert code == EXIT_OK
     sites = {n: nodes[n].state["sites"][f"{n}.example.com"]["template"] for n in ("nl-1", "nl-2")}

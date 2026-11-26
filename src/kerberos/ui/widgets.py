@@ -13,7 +13,6 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional, Union
 
 from rich import box
-from rich.cells import cell_len
 from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
 from rich.padding import Padding
 from rich.panel import Panel
@@ -28,10 +27,8 @@ from kerberos.ui.logo import LOGO, big_number
 from kerberos.ui.palette import (
     SYMBOL_FAIL,
     SYMBOL_OK,
-    SYMBOL_RISK,
     SYMBOL_ROLLED_BACK,
     SYMBOL_RUNNING,
-    risk_style,
     score_style,
 )
 
@@ -40,7 +37,6 @@ Body = Union[RenderableType, Callable[[int, int], RenderableType]]
 KeyHints = Union[Sequence[tuple[str, str]], Callable[[], Sequence[tuple[str, str]]]]
 
 POINTER = "›"
-RISKS = ("high", "medium", "low", "info")
 # Without colour the reverse video of the cursor is lost: a bar marks its place.
 CURSOR_BAR = "▏"
 SCROLL_KEYS = ("up", "down", "pgup", "pgdn", "home", "end")
@@ -51,6 +47,14 @@ def text(value: Union[str, Text], style: str = "") -> Text:
     if isinstance(value, Text):
         return value
     return Text(value, style=style)
+
+
+def bold(value: str, style: str = "") -> Text:
+    """Bold text in a colour of the palette: a palette name cannot share one style
+    string with «bold», Rich would read it as a colour."""
+    line = Text(value, style=style)
+    line.stylize("bold")
+    return line
 
 
 class Screen:
@@ -615,25 +619,6 @@ class ScoreBadge:
         return Panel(Group(*lines), box=box.ROUNDED, border_style=style, expand=False)
 
 
-@dataclass
-class FindingItem:
-    """One row of findings as the screen shows it; texts are ready and masked."""
-
-    risk: str
-    group: str
-    target: str
-    title: str
-    threat: str
-    action: str
-    action_style: str = "muted"
-    details: str = ""
-    passed: bool = False
-    extra: dict = field(default_factory=dict)
-    # The «Что делать» cell: in full, and in one word for a narrow terminal (K22).
-    todo: str = ""
-    todo_short: str = ""
-
-
 def cell_lines(console: Console, cells: Sequence[tuple[Text, int]]) -> list[Text]:
     """Cells side by side, each wrapped to its width; one space between them."""
     wrapped = [list(cell.wrap(console, width, overflow="fold")) or [Text("")]
@@ -652,31 +637,76 @@ def cell_lines(console: Console, cells: Sequence[tuple[Text, int]]) -> list[Text
     return lines
 
 
-class FindingList:
-    """Findings as a table under each topic: risk, where, what is wrong, what to do
-    (K22). Space opens the details of one row (Enter goes on).
+@dataclass
+class Column:
+    """A column of a block: the natural width of its cells up to `most`, or with
+    `flex` a share of what the other columns leave (never below `least`)."""
 
-    ↑ ↓ move by one row, PgUp and PgDn by a screenful, Home and End to the first and
-    the last. Below WIDE columns «Что делать» shrinks to one word; the full text is in
-    the details.
+    most: int = 40
+    least: int = 4
+    flex: int = 0
+
+
+@dataclass
+class BlockRow:
+    """One row of a block: cells side by side; `details` show under it when open."""
+
+    cells: list
+    details: list = field(default_factory=list)
+    key: object = None  # identity of the row in BlockList.expanded
+    muted: bool = False
+    main: int = 1  # the cell that lights up on the cursor row
+
+
+@dataclass
+class Block:
+    """A framed block (K23). The title carries a symbol and a word, so a block reads
+    without colour; `note` stands at the right of the bottom border."""
+
+    title: str
+    rows: list
+    columns: list
+    style: str = "muted"
+    note: str = ""
+
+
+class BlockList:
+    """Blocks one under another (S6, the plan, S9; K23): ↑ ↓ move by row across the
+    blocks, PgUp PgDn by a screenful, Home End to the first and the last row; Space
+    opens the details of a row that has them.
+
+    Every line is drawn here, borders too, so the list scrolls by lines and the row
+    under the cursor always shows with the title of its block when it is the first.
     """
 
-    WIDE = 90
-
-    def __init__(self, items: Sequence[FindingItem], group_by: str = "group") -> None:
-        self.items = list(items)
-        self.group_by = group_by
+    def __init__(self, blocks: Sequence[Block] = ()) -> None:
+        self.blocks = list(blocks)
         self.cursor = 0
-        self.expanded: set[int] = set()
+        self.expanded: set = set()
         self.viewport: Optional[int] = None
         self._offset = 0
-        self._page = 1  # rows that fit on the screen, from the last frame
-        self._narrow = False
+        self._page = 1
+
+    @property
+    def rows(self) -> list[BlockRow]:
+        return [row for block in self.blocks for row in block.rows]
+
+    def current(self) -> Optional[BlockRow]:
+        rows = self.rows
+        if not rows:
+            return None
+        self.cursor = max(0, min(self.cursor, len(rows) - 1))
+        return rows[self.cursor]
+
+    @staticmethod
+    def key_of(index: int, row: BlockRow) -> object:
+        return row.key if row.key is not None else index
 
     def handle(self, key: str) -> Optional[str]:
-        if not self.items:
+        rows = self.rows
+        if not rows:
             return None
-        last = len(self.items) - 1
+        last = len(rows) - 1
         moves = {"up": -1, "down": 1, "pgup": -self._page, "pgdn": self._page}
         if key in moves:
             self.cursor = max(0, min(last, self.cursor + moves[key]))
@@ -685,87 +715,122 @@ class FindingList:
         elif key == "end":
             self.cursor = last
         elif key == "space":
-            self.expanded ^= {self.cursor}
+            row = self.current()
+            if row is not None and row.details:
+                self.expanded ^= {self.key_of(self.cursor, row)}
         return None
 
-    def _widths(self, width: int) -> list[int]:
-        """Pointer, risk, where, what is wrong, what to do."""
-        narrow = self._narrow = width < self.WIDE
-        risk = max(cell_len(f"{SYMBOL_RISK} {t('risk.' + r)}") for r in RISKS)
-        if narrow:
-            todo = max([cell_len(t("s6.col.todo"))]
-                       + [cell_len(i.todo_short or i.action) for i in self.items])  # fmt: skip
-        else:
-            todo = max(16, width * 26 // 100)
-        longest = max([cell_len(i.target) for i in self.items] + [cell_len(t("s6.col.where"))])
-        where = min(longest, max(8, width * 20 // 100))
-        what = width - 1 - risk - where - todo - 4
-        if what < 20:
-            where = max(6, where - (20 - what))
-            what = width - 1 - risk - where - todo - 4
-        return [1, risk, where, max(10, what), todo]
+    @staticmethod
+    def _widths(block: Block, room: int) -> list[int]:
+        """Widths of the cells of a block; `room` is the width the cells share."""
+        columns = block.columns
+        widths = []
+        for i, column in enumerate(columns):
+            longest = max([text(r.cells[i]).cell_len for r in block.rows if i < len(r.cells)]
+                          + [0])  # fmt: skip
+            widths.append(0 if column.flex else min(column.most, longest))
+        flexible = [i for i, c in enumerate(columns) if c.flex]
+        need = sum(columns[i].least for i in flexible) - (room - sum(widths))
+        while need > 0:  # the widest fixed columns give way first
+            shrinking = [i for i, c in enumerate(columns) if not c.flex and widths[i] > c.least]
+            if not shrinking:
+                break
+            widest = max(shrinking, key=lambda i: widths[i])
+            widths[widest] -= 1
+            need -= 1
+        rest = room - sum(widths)
+        weight = sum(columns[i].flex for i in flexible) or 1
+        given = 0
+        for n, i in enumerate(flexible):
+            share = rest - given if n == len(flexible) - 1 else rest * columns[i].flex // weight
+            widths[i] = max(columns[i].least, share)
+            given += widths[i]
+        return widths
 
-    def _head(self, widths: list[int]) -> Text:
-        names = ["", t("s6.col.risk"), t("s6.col.where"), t("s6.col.what"), t("s6.col.todo")]
-        return Text(" ").join(Text(n.ljust(w)[:w], style="muted") for n, w in zip(names, widths))
+    @staticmethod
+    def _top(block: Block, width: int) -> Text:
+        title = bold(block.title, "" if block.style == "muted" else block.style)
+        title.truncate(max(1, width - 5), overflow="ellipsis")
+        line = Text("╭─ ", style=block.style)
+        line.append_text(title)
+        line.append(" " + "─" * max(0, width - 5 - title.cell_len) + "╮", style=block.style)
+        return line
 
-    def _block(self, console: Console, i: int, item: FindingItem, widths: list[int]) -> list[Text]:
-        """Lines of one row, and its details under «Что не так» when open."""
-        current = i == self.cursor
-        style = "ok" if item.passed else risk_style(item.risk)
-        symbol = SYMBOL_OK if item.passed else SYMBOL_RISK
-        narrow = self._narrow
-        todo = (item.todo_short if narrow else item.todo) or item.action
-        cells = [
-            (Text(POINTER if current else " ", style="accent"), widths[0]),
-            (Text(f"{symbol} {t('risk.' + item.risk)}", style=style), widths[1]),
-            (Text(item.target, style="bold"), widths[2]),
-            (Text(item.title, style="accent" if current else ""), widths[3]),
-            (Text(todo, style=item.action_style), widths[4]),
-        ]
-        lines = cell_lines(console, cells)
-        if i in self.expanded:
-            indent = sum(widths[:3]) + 3
-            width = sum(widths) + 4
-            extra = [(item.threat, "muted")]
-            if narrow or not item.todo:
-                extra.append((item.action, item.action_style))
-            extra += [(d, "muted") for d in item.details.split("\n")]
-            for value, tone in extra:
-                if value:
-                    line = Text(" " * indent + value, style=tone)
-                    lines.extend(hang(console, line, width, indent))
-        return lines
+    @staticmethod
+    def _bottom(block: Block, width: int) -> Text:
+        if not block.note:
+            return Text("╰" + "─" * max(0, width - 2) + "╯", style=block.style)
+        note = Text(block.note, style="muted")
+        note.truncate(max(1, width - 6), overflow="ellipsis")
+        line = Text("╰" + "─" * max(0, width - 5 - note.cell_len) + " ", style=block.style)
+        line.append_text(note)
+        line.append(" ─╯", style=block.style)
+        return line
+
+    @staticmethod
+    def _side(content: Text, width: int, style: str) -> Text:
+        inner = content.copy()
+        inner.truncate(max(1, width - 4), pad=True)
+        line = Text("│ ", style=style)
+        line.append_text(inner)
+        line.append(" │", style=style)
+        return line
+
+    def _cells(self, index: int, row: BlockRow, widths: list[int]) -> list[tuple[Text, int]]:
+        current = index == self.cursor
+        cells = [(Text(POINTER if current else " ", style="accent"), 1)]
+        for i, (cell, width) in enumerate(zip(row.cells, widths)):
+            value = text(cell).copy()
+            if row.muted:
+                value = Text(value.plain, style="muted")
+            elif current and i == row.main:
+                value.stylize("accent")
+            cells.append((value, width))
+        return cells
+
+    def lines(self, console: Console, width: int) -> tuple[list[Text], list[tuple[int, int]]]:
+        """All lines of the blocks, and the lines of each row (with the title of its
+        block for the first row, with the bottom border for the last)."""
+        lines: list[Text] = []
+        spans: list[tuple[int, int]] = []
+        inner = max(10, width - 4)
+        index = 0
+        for block in self.blocks:
+            if not block.rows:
+                continue
+            lines.append(self._top(block, width))
+            # The pointer and the space after it, then one space between the cells.
+            widths = self._widths(block, inner - 1 - len(block.columns))
+            for n, row in enumerate(block.rows):
+                start = len(lines) - (1 if n == 0 else 0)
+                body = cell_lines(console, self._cells(index, row, widths))
+                if row.details and self.key_of(index, row) in self.expanded:
+                    indent = 2 + sum(widths[: max(0, row.main)]) + max(0, row.main)
+                    for detail in row.details:
+                        line = Text(" " * indent).append_text(text(detail))
+                        body.extend(hang(console, line, inner, indent))
+                lines.extend(self._side(line, width, block.style) for line in body)
+                spans.append((start, len(lines)))
+                index += 1
+            lines.append(self._bottom(block, width))
+            spans[-1] = (spans[-1][0], len(lines))
+        return lines, spans
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
-        width = options.max_width
         height = self.viewport or options.height or 10**6
-        widths = self._widths(width)
-        rendered: list[Text] = []
-        start_of: dict[int, int] = {}
-        end_of: dict[int, int] = {}
-        group = None
-        for i, item in enumerate(self.items):
-            key = getattr(item, self.group_by)
-            if key != group:
-                if rendered:
-                    rendered.append(Text(""))
-                rendered.append(Text(key, style="bold"))
-                rendered.append(self._head(widths))
-                group = key
-            start_of[i] = len(rendered)
-            rendered.extend(self._block(console, i, item, widths))
-            end_of[i] = len(rendered)
-        if self.items:
-            start, end = start_of[self.cursor], end_of[self.cursor]
+        lines, spans = self.lines(console, options.max_width)
+        if spans:
+            self.cursor = max(0, min(self.cursor, len(spans) - 1))
+            start, end = spans[self.cursor]
             if start < self._offset:
-                self._offset = max(0, start - 2)
+                self._offset = start
             elif end > self._offset + height:
-                self._offset = end - height
+                self._offset = min(start, end - height)
+            self._offset = max(0, min(self._offset, max(0, len(lines) - height)))
             bottom = self._offset + height
-            shown = [i for i in start_of if start_of[i] >= self._offset and end_of[i] <= bottom]
+            shown = [s for s, e in spans if s >= self._offset and e <= bottom]
             self._page = max(1, len(shown) - 1)
-        yield from rendered[self._offset : self._offset + height]
+        yield from lines[self._offset : self._offset + height]
 
 
 # An info plate stays neutral: red is the brand and the selection, not a warning.

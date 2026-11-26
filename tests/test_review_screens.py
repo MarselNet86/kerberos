@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from helpers import flat, login_keys, make_app, row_of, seen, typed
+from helpers import flat, login_keys, make_app, on, on_group, plan_index, seen, typed
 from hypothesis import given
 from hypothesis import strategies as st
 from rich.console import Group
@@ -18,17 +18,18 @@ from rich.text import Text
 from kerberos.copy import t
 from kerberos.demo.fleet import build_nodes
 from kerberos.fixes.journal import RunStore
-from kerberos.fixes.model import TOPICS
 from kerberos.flow import EXIT_INTERRUPTED, EXIT_OK
 from kerberos.report import markdown
 from kerberos.state import State
 from kerberos.ui.terminal import FakeTerminal, frame_text
 from kerberos.ui.widgets import (
+    Block,
+    BlockList,
+    BlockRow,
     Checklist,
     Clamp,
+    Column,
     Consent,
-    FindingItem,
-    FindingList,
     Pager,
     ScoreBadge,
     Screen,
@@ -47,7 +48,7 @@ TO_PLAN = TO_S4_END + ["enter", "enter"] + ["enter", "enter", "enter"]
 LAUNCHER = "/opt/kerberos/kerberos"
 XUI_TO_PLAN = ["down", "enter"] + typed("admin") + ["enter"] + typed("pw") + ["enter"]
 XUI_TO_PLAN += ["enter", "enter", "enter"]  # S2 summary, S4 summary, S6 → S7
-XUI_PORT_ROW, XUI_STEAL_ROW = 4, 5
+XUI_STEAL = ["end"]  # the own domain of the server: the last row of S7 (K23)
 
 
 def short_state() -> State:
@@ -111,26 +112,25 @@ def test_rollback_consent_at_80x24_keeps_its_button_and_own_keys():
 
 # -- UX 2, 9, 13, 22: S9 pins what matters above a list that scrolls --------------------------
 def test_s9_at_80x24_pins_the_new_ssh_port_summary_and_rollback_command():
-    keys = ["down"] * row_of("nl-1", "ssh.port") + ["space", "enter", "enter", "pgdn", "enter"]
+    keys = on("nl-1", "ssh.port", "space") + ["enter", "enter", "pgdn", "enter"]
     app, term, code = run_fix(keys)
     assert code == EXIT_OK
     run = last_run(app)
     port = next(c for c in run["changes"] if c["fixId"] == "ssh.port")["details"]["newPort"]
     s9 = titled(term, "done.title")
     first = s9[0]
-    assert t("s9.ssh_port", node="nl-1", port=port) in first
-    command = f"ssh -p {port} root@203.0.113.10"
-    assert t("s9.login", command=command) in flat(first)
+    line = t("s9.save.ssh", node="nl-1", command=f"ssh -p {port} root@203.0.113.10")
+    assert t("s9.block.save") in first and line in first
     assert "kerberos ssh" not in first, "no administrator key on this server: no kerberos ssh"
     assert t("s9.applied", ok=len(run["changes"]), total=len(run["changes"])) in first
-    lines = body_lines(first)
+    lines = [line.strip() for line in body_lines(first)]
     rollback = f"sudo {LAUNCHER} rollback {run['runId']}"
-    assert t("done.rollback") in lines[-2] and lines[-1].strip() == rollback
-    assert s9[1] != first and t("s9.ssh_port", node="nl-1", port=port) in s9[1], "PgDn scrolls"
+    assert lines[lines.index(t("done.rollback")) + 1] == rollback, "the command on its own line"
+    assert s9[1] != first and line in s9[1], "PgDn scrolls the blocks, the new port stays"
 
 
 def test_finalize_consent_at_80x24_has_its_own_keys():
-    keys = ["down"] * row_of("nl-1", "self_steal") + ["d"] + list("nl-1.example.com")
+    keys = on("nl-1", "self_steal", "d", *"nl-1.example.com")
     app, term, code = run_fix(keys + ["enter", "enter", "enter", "enter"], height=30)
     assert code == EXIT_OK
     app.env.clock.advance(24 * 3600 + 1)
@@ -145,13 +145,14 @@ def test_finalize_consent_at_80x24_has_its_own_keys():
 def test_kerberos_ssh_is_offered_only_with_the_administrator_key():
     # «Создать ключ на сервере панели»: the key exists, so `kerberos ssh` works.
     keys = TO_S4_END + ["down", "enter", "enter", "enter", "enter"]
-    keys += ["down"] * row_of("nl-1", "ssh.port") + ["space", "enter", "enter", "enter"]
+    keys += on("nl-1", "ssh.port", "space") + ["enter", "enter", "enter"]
     app, term = make_app(keys, height=30, state=short_state())
     assert app.run("fix") == EXIT_OK
     assert app.env.state.admin_key.exists()
     port = next(c for c in last_run(app)["changes"] if c["fixId"] == "ssh.port")
     command = f"ssh -p {port['details']['newPort']} root@203.0.113.10"
-    assert seen(term, t("s9.login.admin", command=command, node="nl-1"))
+    assert seen(term, t("s9.save.ssh", node="nl-1", command=command))
+    assert seen(term, t("s9.save.kerberos_ssh"))
 
 
 def test_s9_counts_what_did_not_apply():
@@ -167,7 +168,7 @@ def test_s9_counts_what_did_not_apply():
 
 def test_finalize_is_automatic_on_s9_only_with_a_timer():
     # The demo panel server has no systemd-run: the timer is not set (§10.4 step 6).
-    keys = ["down"] * row_of("nl-1", "self_steal") + ["d"] + list("nl-1.example.com")
+    keys = on("nl-1", "self_steal", "d", *"nl-1.example.com")
     app, term, code = run_fix(keys + ["enter", "f", "enter", "enter", "enter"], height=30)
     assert code == EXIT_OK
     run = last_run(app)
@@ -200,48 +201,46 @@ def test_a_change_that_did_not_roll_back_is_never_shown_as_rolled_back():
 
 # -- UX 4, 6, 18, 19: the plan at 80 columns ----------------------------------------------
 def test_plan_at_80_columns_keeps_the_fix_names_and_explains_the_current_row():
-    keys = ["down"] * row_of("nl-1", "ssh.port") + ["esc", "q", "enter"]
+    # K23: the group «Новый порт SSH» opened, the cursor on its first row, nl-1's.
+    keys = on_group("ssh_port", "right", "down") + ["esc", "q", "enter"]
     app, term, _code = run_fix(keys)
     plan = titled(term, "plan.title")[-1]
-    port = app.session.data["plan"][row_of("nl-1", "ssh.port")].params["port"]
-    label = t("fix.ssh.port.label", port=port)
+    port = app.session.data["plan"][plan_index("nl-1", "ssh.port")].params["port"]
     row = next(line for line in plan.splitlines() if "›" in line)
-    assert label in row, "the column «Исправление» keeps its width"
-    assert t("plan.col.risk") in plan and t("importance.medium") in row
-    assert t("risk.medium") not in plan, "importance, not the risk of the change"
-    assert t("fix.ssh_port.warning", port=port)[:40] in flat(plan), "the warning under the table"
+    assert t("fix.ssh.port.label", port=port) in row, "the name of the measure keeps its width"
+    assert t("fix.ssh_port.warning", port=port)[:40] in flat(plan), "the warning under the blocks"
     assert "Esc " + t("keys.back") in plan.splitlines()[-1]
 
 
 def test_a_blocked_row_can_be_reached_and_tells_why():
     # «Пропустить» the administrator key: «Вход только по ключу» cannot run (§8.5).
     keys = TO_S4_END + ["down", "down", "enter", "enter", "enter", "enter"]
-    keys += ["down"] * 6 + ["esc", "q", "enter"]
+    keys += on_group("access", "right") + ["down"] * 8 + ["esc", "q", "enter"]
     app, term = make_app(keys, state=short_state())
     app.run("fix")
     items = app.session.data["plan"]
-    blocked = next(i for i, item in enumerate(items) if item.blocked == "no_admin_key")
+    assert any(item.blocked == "no_admin_key" for item in items)
     frames = titled(term, "plan.title")
     reason = t("plan.details.blocked", reason=t("plan.blocked.no_admin_key"))
     assert any(reason in flat(f) for f in frames)
-    assert blocked <= 6
 
 
 def test_a_marks_everything_but_the_ssh_port_and_takes_it_back():
     app, term, _code = run_fix(["a", "a", "esc", "q", "enter"], width=100, height=30)
     items = app.session.data["plan"]
-    counts = [re.search(r"Отмечено: (\d+)", f).group(1) for f in titled(term, "plan.title")]
-    marked, cleared = int(counts[1]), int(counts[2])
+    notes = [re.search(r"отмечено (\d+) из (\d+)", f) for f in titled(term, "plan.title")]
+    marked, cleared = int(notes[1].group(1)), int(notes[2].group(1))
     assert cleared == 0, "the second press takes back what the first marked"
-    ports = [i for i in items if i.fix_id == "ssh.port"]
-    waiting = [i for i in items if i.fix_id in ("self_steal", "cdn.edge_only")]
-    assert marked == len([i for i in items if not i.blocked]) - len(ports) - len(waiting)
+    in_groups = [i for i in items if i.fix_id != "self_steal" and not i.blocked]
+    ports = [i for i in in_groups if i.fix_id == "ssh.port"]
+    waiting = [i for i in in_groups if i.fix_id == "cdn.edge_only"]
+    assert marked == len(in_groups) - len(ports) - len(waiting)
+    assert not any(i.selected for i in items if i.fix_id == "self_steal"), "they wait for a domain"
     assert t("keys.all_but_port") in titled(term, "plan.title")[0].splitlines()[-1]
 
 
 def test_several_new_ssh_ports_get_one_warning():
-    keys = ["down"] * row_of("nl-1", "ssh.port") + ["space"]
-    keys += ["down"] * (row_of("nl-2", "ssh.port") - row_of("nl-1", "ssh.port")) + ["space"]
+    keys = on("nl-1", "ssh.port", "space") + on("nl-2", "ssh.port", "space")
     app, term, _code = run_fix(keys + ["enter", "esc", "esc", "q", "enter"], height=46)
     items = app.session.data["plan"]
     ports = {app.session_name(i.node_uuid): i.params["port"] for i in items
@@ -254,7 +253,7 @@ def test_several_new_ssh_ports_get_one_warning():
 
 
 def test_plan_footer_follows_the_row_and_help_lists_its_keys():
-    keys = ["down"] * row_of("nl-1", "self_steal") + ["?", "x", "esc", "q", "enter"]
+    keys = on("nl-1", "self_steal") + ["?", "x", "esc", "q", "enter"]
     app, term, _code = run_fix(keys)
     plan = titled(term, "plan.title")
     footer = plan[-1].splitlines()[-1]
@@ -264,13 +263,11 @@ def test_plan_footer_follows_the_row_and_help_lists_its_keys():
 
 
 def test_waiting_domains_leave_the_plan_its_rows():
-    nl1, nl2 = row_of("nl-1", "self_steal"), row_of("nl-2", "self_steal")
-    keys = ["down"] * nl1 + ["d"] + list("late1.example.com") + ["enter"]
-    keys += ["down"] * (nl2 - nl1) + ["d"] + list("late2.example.com") + ["enter"]
+    keys = on("nl-1", "self_steal", "d", *"late1.example.com", "enter")
+    keys += on("nl-2", "self_steal", "d", *"late2.example.com", "enter")
     app, term, _code = run_fix(keys + ["esc", "q", "enter"])
     plan = titled(term, "plan.title")[-1]
-    rows = [line for line in plan.splitlines() if "[✓]" in line or "[ ]" in line]
-    assert len(rows) >= 10, "two waiting domains must not push the table off the screen"
+    assert "late1.example.com" in plan and "late2.example.com" in plan, "both rows stay"
     record = t("plan.domain.wait", record="A late2.example.com → 203.0.113.11")
     assert record in flat(plan), "the record of the current row, in full"
 
@@ -278,14 +275,14 @@ def test_waiting_domains_leave_the_plan_its_rows():
 def test_finalize_line_shows_only_with_a_marked_own_domain():
     app, term, _code = run_fix(["esc", "q", "enter"], width=100, height=30)
     assert not seen(term, t("plan.finalize.manual"))
-    keys = ["down"] * row_of("nl-1", "self_steal") + ["d"] + list("nl-1.example.com")
+    keys = on("nl-1", "self_steal", "d", *"nl-1.example.com")
     app, term, _code = run_fix(keys + ["enter", "esc", "q", "enter"], width=100, height=30)
     assert flat(t("plan.finalize.manual")) in flat(titled(term, "plan.title")[-1])
 
 
 # -- UX 5, 17: 3x-ui ------------------------------------------------------------------
 def test_xui_consent_warns_about_3x_ui_and_not_about_remnawave():
-    keys = ["down"] * XUI_STEAL_ROW + ["d"] + list("vpn.example.com") + ["enter"]
+    keys = XUI_STEAL + ["d"] + list("vpn.example.com") + ["enter"]
     app, term, _code = run_fix(keys + ["enter", "esc", "esc", "q", "enter"], height=40,
                                panel_kind=None)  # fmt: skip
     consent = flat(titled(term, "consent.title")[0])
@@ -296,7 +293,7 @@ def test_xui_consent_warns_about_3x_ui_and_not_about_remnawave():
 
 
 def test_xui_plan_names_the_address_and_hides_reserve_and_cdn_keys():
-    keys = ["down"] * XUI_STEAL_ROW + ["d", "esc", "esc", "q", "enter"]
+    keys = XUI_STEAL + ["d", "esc", "esc", "q", "enter"]
     app, term, _code = run_fix(keys, panel_kind=None)
     assert seen(term, t("plan.domain.hint", ip="203.0.113.50"))
     for frame in titled(term, "plan.title"):
@@ -319,23 +316,19 @@ def test_s6_at_80x24_pages_through_findings_with_a_one_line_score():
     assert body_lines(s6[0])[0].strip().startswith(t("report.score", score=run["scoreBefore"]))
     pointer = [next(line for line in f.splitlines() if "›" in line) for f in s6]
     assert pointer[0] != pointer[1] != pointer[2], "PgDn and End move through the findings"
-    assert t("check.watch.missing.title") in pointer[2], "End: the last finding"
+    assert t("s6.info.row", n=0).split(":")[0] in pointer[2], "End: the last row, explanations"
     path = str(RunStore(app.env.state, app.env.clock).path(run["runId"]) / "report.md")
     assert any(path in line for line in body_lines(s6[0])), "the path is never cut"
-    topics = {t(f"topic.{topic}") for topic in TOPICS}
     lines = body_lines(s6[0])
     after_path = next(i for i, line in enumerate(lines) if "report.md" in line) + 1
     for line in lines[after_path:]:
-        text = line.strip()
-        if not text or text in topics or text[0] in "›●" or t("s6.col.what") in text:
-            continue
-        # K22: a wrapped cell goes on in its own column, under «Где» or further right.
-        assert line.startswith(" " * 13), f"a wrapped line lost its column: {line!r}"
+        # K23: under the summary every line belongs to a block, wrapped cells too.
+        assert not line.strip() or line.strip()[0] in "╭│╰", f"a line out of its block: {line!r}"
 
 
 def test_s6_texts_are_plain_words():
-    # K22: what a finding threatens is in its details, so every row is opened; wide
-    # enough that no cell wraps.
+    # K23: what a problem threatens is in the details of its row, so every row is
+    # opened; wide enough that no cell wraps.
     keys = ["space", "down"] * 60 + ["q", "enter"]
     app, term, _code = check_app(keys, width=200, height=400)
     text = " ".join(flat(f) for f in titled(term, "s6.title"))
@@ -418,7 +411,7 @@ def test_cursor_and_colour_samples_without_colour():
         field.handle("left")
     assert "nl1.example▏.com" in frame_text(field, 40, 3, color=False)
     assert "▏" not in frame_text(field, 40, 3, color=True)
-    keys = ["down"] * row_of("nl-1", "self_steal") + ["esc", "q", "enter"]
+    keys = on("nl-1", "self_steal") + ["esc", "q", "enter"]
     _app, term, _code = run_fix(keys)
     assert "██" not in titled(term, "plan.title")[-1]
     app, term = make_app(TO_PLAN + keys, state=short_state())
@@ -484,18 +477,17 @@ def test_compact_score_badge_is_one_line_with_words():
     assert t("score.yellow") in line and t("score.was", before=38) in line
 
 
-def test_finding_list_pages():
-    items = [FindingItem("medium", "Тема", f"n{i}", f"Находка {i}", "угроза", "вручную")
-             for i in range(30)]  # fmt: skip
-    listing = FindingList(items)
+def test_block_list_pages_across_its_rows():
+    rows = [BlockRow([Text(f"Находка {i}"), Text(f"n{i}")]) for i in range(30)]
+    listing = BlockList([Block("Блок", rows, [Column(flex=1), Column(most=4)])])
     listing.viewport = 10
     render(listing)
     listing.handle("pgdn")
     assert listing.cursor > 1
     listing.handle("end")
-    assert listing.cursor == 29
+    assert listing.cursor == 29 and "Находка 29" in render(listing)
     listing.handle("home")
-    assert listing.cursor == 0
+    assert listing.cursor == 0 and "Блок" in render(listing), "the first row shows its block"
 
 
 @given(
