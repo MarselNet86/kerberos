@@ -31,6 +31,9 @@ XUI_ONLY = {"xui.panel_exposed", "xui.panel_tls", "xui.panel_2fa"}  # §7.6, tes
 # K17: findings only on nodes with renewals on :80 or the site of KERBEROS; the demo fleet has
 # neither, so its score (38 → 77, §12.4) stays. Covered in test_renewal_checks.py.
 RENEWALS = {"acme.port80", "acme.stop_hook"}
+# K24: a finding only on a node whose profile was deleted; the demo fleet has none, so its
+# score stays. Covered in test_own_profile.py.
+PROFILELESS = {"node.no_profile"}
 
 
 @pytest.fixture(scope="module")
@@ -44,7 +47,7 @@ def results(data, check_id):
 
 def test_registry_is_section_10_2():
     run_checks(demo_input()[1])  # registers the rules
-    assert {item.check_id for item in REGISTRY} == SECTION_10_2 | XUI_ONLY | RENEWALS
+    assert {item.check_id for item in REGISTRY} == SECTION_10_2 | XUI_ONLY | RENEWALS | PROFILELESS
 
 
 @pytest.mark.parametrize("check_id", sorted(SECTION_10_2))
