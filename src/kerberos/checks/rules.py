@@ -191,6 +191,17 @@ def no_sni(data: CheckInput) -> list[Finding]:
     return result
 
 
+@check("node.no_profile", "sni", "medium", "self_steal", "fix", panels=REMNAWAVE)
+def no_profile(data: CheckInput) -> list[Finding]:
+    """K24: a node whose profile was deleted runs nothing for clients; its own domain gives
+    it a profile. Nodes with a profile get no finding: the score of a fleet stays."""
+    return [
+        finding("node.no_profile", node_target(item.node), False, {})
+        for item in data.nodes
+        if not item.node.is_disabled and data.snapshot.node_profile(item.node) is None
+    ]
+
+
 @check("hy2.foreign_masquerade", "sni", "medium", "self_steal", "fix", panels=REMNAWAVE)
 def foreign_masquerade(data: CheckInput) -> list[Finding]:
     result = []

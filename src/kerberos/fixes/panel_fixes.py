@@ -108,7 +108,8 @@ class PanelFixes:
                                          f"template-{current.uuid}", current.json)  # fmt: skip
                     details["templates"][current.uuid] = {"created": False, "previousPath": path}
                     self.engine.save()
-                    if current.json and not self.engine.ask_diff(diff_text(wanted, current.json)):
+                    edited = current.json and not subscription.own_write(kind, current.json)
+                    if edited and not self.engine.ask_diff(diff_text(wanted, current.json)):
                         result[kind] = current.uuid  # the person keeps their edits
                         continue
                 # What is about to be written, before the PATCH: a rollback compares the

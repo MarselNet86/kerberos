@@ -59,6 +59,16 @@ TEXT: dict[str, str] = {
         "Конфиг ноды заменится проверенным конфигом KERBEROS: Reality и Hysteria2 на вашем "
         "домене. Ключи Reality и остальные ваши инбаунды сохранятся."
     ),
+    "fix.own_profile.warning": (
+        "Нода {node} перейдёт с общего профиля «{shared}» на свой «{profile}». Ключ Reality "
+        "сохранится, пользователи тех же сквадов увидят ноду, как раньше. Панель перезапустит "
+        "ноду: клиенты переподключатся за секунды. Общий профиль и другие ноды на нём не "
+        "меняются."
+    ),
+    "fix.own_profile.warning.none": (
+        "У ноды {node} нет профиля: KERBEROS создаст ей свой «{profile}» с новым ключом "
+        "Reality, и панель запустит на ней Xray."
+    ),
     "fix.mount.warning": (
         "Нода {node} перезапустится, чтобы увидеть сертификат для Hysteria2. "
         "Клиенты переподключатся за секунды."
@@ -149,6 +159,7 @@ TEXT: dict[str, str] = {
         "d          домен для строки «Свой домен»\n"
         "r          резервная нода для неё\n"
         "g          другой сайт-заглушка\n"
+        "u          сквады, где пользователи увидят новую ноду\n"
         "e          сети CDN для фильтра\n"
         "f          убрать старые имена автоматически через сутки\n"
         "p          логин и пароль портала перед панелью\n"
@@ -455,6 +466,10 @@ TEXT: dict[str, str] = {
     "check.reality.foreign_sni.threat": (
         "Чужое имя на IP хостинга заметно: такие ноды блокируют за минуты"
     ),
+    "check.node.no_profile.title": "У ноды нет профиля: через неё никто не подключится",
+    "check.node.no_profile.threat": (
+        "Профиль ноды удалили в панели: Xray на ней не запущен, пользователи её не видят"
+    ),
     "check.probe.no_sni.title": "По IP без имени отдаётся чужой сертификат или нет сайта",
     "check.probe.no_sni.threat": "Любой, кто зайдёт на IP, поймёт, что это не обычный сайт",
     "check.hy2.foreign_masquerade.title": "Hysteria2 маскируется под чужой сайт",
@@ -666,6 +681,7 @@ TEXT: dict[str, str] = {
     "fix.self_steal.node.label": "Новый инбаунд включён на ноде",
     "fix.self_steal.squads.label": "Новый инбаунд в сквадах",
     "fix.self_steal.hosts.label": "Копии хостов с SNI {domain}, старые выключены",
+    "fix.self_steal.own_profile.label": "Свой профиль ноды «{profile}»",
     "fix.sub.templates.label": "Шаблоны подписки KERBEROS в панели",
     "fix.sub.template.label": "Хосты на шаблон подписки KERBEROS",
     "fix.sub.ping_type.label": "Пинг клиентов через туннель (ping-type)",
@@ -779,8 +795,9 @@ TEXT: dict[str, str] = {
         "домен или снимите отметку"
     ),
     "plan.blocked.node_offline": "нода не подключена к панели",
-    "plan.blocked.no_profile": "у ноды нет профиля",
-    "plan.blocked.shared_profile": "профиль общий с другими нодами: нужен свой профиль",
+    "plan.blocked.shared_other": (
+        "на общем профиле нода держит ещё {tags}: их KERBEROS не переносит"
+    ),
     "plan.blocked.port80_busy": "порт 80 занят не nginx",
     "plan.blocked.acme_standalone": "продление сертификата через порт 80 не перевести на nginx",
     "plan.blocked.certbot_hook": "общий хук certbot останавливает nginx перед продлением",
@@ -808,6 +825,9 @@ TEXT: dict[str, str] = {
     "error.node_offline": "нода не подключилась к панели после смены профиля",
     "error.host_mismatch": "панель сохранила копию хоста не так, как её отправили",
     "error.node_mismatch": "панель не включила новый инбаунд на ноде",
+    "error.profile_in_use": (
+        "профиль остался: на нём есть ноды или хосты, которые KERBEROS туда не ставил"
+    ),
     "error.hostkey_mismatch": (
         "сервер по-прежнему показывает старый ключ, новых ключей sshd не видит"
     ),
@@ -818,6 +838,8 @@ TEXT: dict[str, str] = {
     "rb.diff.intro": "Этот объект в панели изменили после KERBEROS. Различия:",
     "tpl.diff.intro": "Шаблон KERBEROS в панели правили руками. Чем он отличается от проверенного:",
     "tpl.diff.question": "Записать проверенный шаблон поверх ручных правок?",
+    "tpl.diff.yes": "Enter: записать проверенный",
+    "tpl.diff.no": "Esc: оставить ваш",
     "rb.diff.question": "Откатить всё равно? Ручные правки пропадут.",
     "mode.finalize": "Завершить переход на свой домен: убрать старые имена",
     "app.pending": "Есть незавершённое: убрать старое имя у {n:ноды|нод|нод}",
@@ -1040,11 +1062,13 @@ TEXT: dict[str, str] = {
     "fix.self_steal.node.short": "новый инбаунд на ноде",
     "fix.self_steal.squads.short": "новый инбаунд в сквадах",
     "fix.self_steal.hosts.short": "копии хостов, старые выключены",
+    "fix.self_steal.own_profile.short": "свой профиль ноды",
     "fix.xui.reality.short": "Reality на своём домене",
     "fix.reserve.short": "резервная пара",
     "check.fleet.shared_hostkey.short": "один ключ сервера на нодах",
     "check.reality.foreign_sni.short": "Reality прикрыт чужим сайтом",
     "check.probe.no_sni.short": "чужой сертификат по IP",
+    "check.node.no_profile.short": "нет профиля",
     "check.hy2.foreign_masquerade.short": "Hysteria2 прикрыт чужим сайтом",
     "check.profile.template.short": "непроверенный конфиг",
     "check.site.same_template.short": "одинаковые сайты-заглушки",
@@ -1086,6 +1110,22 @@ TEXT: dict[str, str] = {
     "plan.domain.record": "A-запись: {record}",
     "plan.domain.no_reserve": "без резерва",
     "plan.domain.blocked": "недоступно",
+    "plan.domain.squads": "u: выбрать сквады",
+    "plan.own_profile": "Свой профиль «{profile}» вместо общего «{shared}» (с {nodes})",
+    "plan.own_profile.none": "Свой профиль «{profile}»: сейчас у ноды профиля нет",
+    "plan.need_squads": (
+        "Выберите сквады, где пользователи увидят ноду (клавиша u), или снимите отметку"
+    ),
+    "plan.squads.title": "Кто увидит {node}",
+    "plan.squads.hint": (
+        "Ни один сквад не держит инбаунды ноды. Отметьте сквады: их пользователи получат "
+        "ноду в подписке. Отмечены те, где есть другие ноды."
+    ),
+    "plan.squads.col.name": "Сквад",
+    "plan.squads.col.members": "Пользователей",
+    "plan.squads.confirm": "подтвердить отмеченные",
+    "plan.squads.chosen": "сквады: {names}",
+    "keys.squads": "сквады",
     "plan.group.details": "{group}: {where} · отмечено {n} из {total}",
     "keys.open_group": "по нодам",
     "keys.close_group": "свернуть",
@@ -1094,6 +1134,7 @@ TEXT: dict[str, str] = {
     "consent.block.what.note": "изменений: {n}",
     "consent.block.warnings": "⚠ Важно знать",
     "consent.domain": "{domains}: свой сайт и сертификат, Reality на своём домене, копии хостов",
+    "consent.own_profile": "свой профиль: {profiles}",
     "consent.domain.xui": "{domains}: свой сайт и сертификат, Reality-инбаунды на своём домене",
     "consent.reserve": "резерв {main}: {spare}",
     "consent.backup": "Всё изменённое сохраняется в бэкап и откатывается одной командой.",

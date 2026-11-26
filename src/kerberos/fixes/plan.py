@@ -13,6 +13,7 @@ from typing import Optional
 
 from kerberos.checks import CheckInput, spec
 from kerberos.fixes.model import Finding
+from kerberos.fixes.own_profile import needs_own, other_inbounds, profile_name, squad_params
 
 # §10.1, with access.admin_keys first: the person's own key reaches the node
 # before ssh.key_only turns password login off.
@@ -160,6 +161,7 @@ def build_plan(
                 if port not in item.params["ports"]:
                     item.params["ports"].append(port)
     used_layouts = site_layouts_in_use(data)
+    profile_names = {p.name for p in data.snapshot.profiles}
     hide = items.get(("panel", "xui.panel_hide"))
     if hide is not None:
         info = data.snapshot.panel_info or {}
@@ -175,6 +177,8 @@ def build_plan(
         if item.fix_id == "self_steal":
             item.blocked = self_steal_blocker(data, node)
             item.params["siteSeed"] = free_site_seed(used_layouts, rng)
+            if data.snapshot.kind != "3x-ui" and node is not None:
+                item.params.update(own_params(data, node, profile_names))
         if item.fix_id == "cdn.edge_only":
             item.params = {"paths": edge_paths(data, node), "nets": None}
             if (facts.get("nginx") or {}).get("realip"):
@@ -296,11 +300,10 @@ def self_steal_blocker(data: CheckInput, node) -> Optional[str]:
     """§10.4 conditions; the reason text keys are plan.blocked.<reason>."""
     if node is None or not node.node.is_connected:
         return "node_offline"
-    profile = data.snapshot.node_profile(node.node)
-    if profile is None:
-        return "no_profile"
-    if len(profile.node_uuids) > 1:
-        return "shared_profile"
+    # A shared profile, or none, no longer stops it: the node gets its own (K24), unless it
+    # runs inbounds there that the template does not replace.
+    if data.snapshot.kind != "3x-ui" and other_inbounds(data.snapshot, node.node):
+        return "shared_other"
     listening = (node.facts or {}).get("listening", [])
     if any(s["port"] == 80 and s["proto"] == "tcp" and s.get("process") != "nginx"
            for s in listening):  # fmt: skip
@@ -316,6 +319,23 @@ def self_steal_blocker(data: CheckInput, node) -> Optional[str]:
     if on443 and not xray:
         return "port443"
     return None
+
+
+def own_params(data: CheckInput, node, names: set) -> dict:
+    """K24: the node's own profile when it has none or shares one, the shared one's name,
+    the tags that block it, and where its new inbounds go (§10.4)."""
+    snapshot = data.snapshot
+    params: dict = squad_params(snapshot, node.node)
+    others = other_inbounds(snapshot, node.node)
+    if others:
+        params["otherInbounds"] = others
+    if needs_own(snapshot, node.node):
+        name = profile_name(node.node.name, names)
+        names.add(name)
+        shared = snapshot.node_profile(node.node)
+        params["ownProfile"] = name
+        params["sharedProfile"] = shared.name if shared else None
+    return params
 
 
 def is_xray(process) -> bool:

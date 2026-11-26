@@ -132,10 +132,32 @@ def reality_settings(inbound: Optional[dict]) -> dict:
     return (inbound.get("streamSettings") or {}).get("realitySettings") or {}
 
 
+def unique_tag(base: str, taken: set) -> str:
+    """`base`, else `base-2`, `base-3`: inbound tags are unique across the panel (§7.4)."""
+    if base not in taken:
+        return base
+    number = 2
+    while f"{base}-{number}" in taken:
+        number += 1
+    return f"{base}-{number}"
+
+
 def build_profile(
-    current: dict, node_name: str, domain: str, rng: random.Random, finalized: bool = False
+    current: dict,
+    node_name: str,
+    domain: str,
+    rng: random.Random,
+    finalized: bool = False,
+    *,
+    taken: frozenset = frozenset(),
+    fresh: bool = False,
 ) -> dict:
-    """Profile of the node on its own domain; old server names stay until finalization."""
+    """Profile of the node on its own domain; old server names stay until finalization.
+
+    `taken`: inbound tags of the other profiles of the panel, which a new tag must not
+    repeat. `fresh`: the node's own profile (K24): every tag is new, the Reality key,
+    shortIds and names still come from `current`.
+    """
     inbounds = [i for i in current.get("inbounds") or [] if isinstance(i, dict)]
     reality = next((i for i in inbounds if is_reality(i)), None)
     hysteria = next((i for i in inbounds if is_hysteria(i)), None)
@@ -143,9 +165,13 @@ def build_profile(
     names = [n for n in settings.get("serverNames") or [] if isinstance(n, str) and n != domain]
     short_ids = [s for s in settings.get("shortIds") or [] if isinstance(s, str) and s]
     node = latin_upper(node_name)
+    reality_tag = None if fresh else (reality or {}).get("tag")
+    reality_tag = reality_tag or unique_tag(f"VLESS-REALITY-{node}", set(taken))
+    hysteria_tag = None if fresh else (hysteria or {}).get("tag")
+    hysteria_tag = hysteria_tag or unique_tag(f"HY2-{node}", set(taken) | {reality_tag})
     values = {
-        "__REALITY_TAG__": (reality or {}).get("tag") or f"VLESS-REALITY-{node}",
-        "__HY2_TAG__": (hysteria or {}).get("tag") or f"HY2-{node}",
+        "__REALITY_TAG__": reality_tag,
+        "__HY2_TAG__": hysteria_tag,
         "__REALITY_PRIVATE_KEY__": settings.get("privateKey") or new_private_key(rng),
         # An existing Reality keeps exactly its shortIds; a new one gets a random one.
         "__REALITY_SHORT_ID__": short_ids if reality else [new_short_id(rng)],

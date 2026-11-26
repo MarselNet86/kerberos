@@ -247,8 +247,13 @@ def squad(raw: Any) -> Squad:
             inbounds.append(item["uuid"])
         elif isinstance(item, str):
             inbounds.append(item)
+    info = obj.get("info") if isinstance(obj.get("info"), dict) else {}
+    members = info.get("membersCount")
     return Squad(
-        uuid=_str(obj, "uuid"), name=_str(obj, "name", required=False), inbound_uuids=inbounds
+        uuid=_str(obj, "uuid"),
+        name=_str(obj, "name", required=False),
+        inbound_uuids=inbounds,
+        members=members if isinstance(members, int) and not isinstance(members, bool) else None,
     )
 
 

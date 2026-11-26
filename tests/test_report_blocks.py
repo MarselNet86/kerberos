@@ -149,7 +149,8 @@ def test_every_measure_has_an_area_and_words():
     from kerberos.fixes.self_steal import AGENT_STEPS
 
     fixes = set(NODE_ORDER) | set(PANEL_ORDER) | set(AGENT_STEPS) | {
-        "self_steal.profile", "self_steal.node", "self_steal.squads", "self_steal.hosts",
+        "self_steal.own_profile", "self_steal.profile", "self_steal.node", "self_steal.squads",
+        "self_steal.hosts",
         "sub.templates", "xui.reality"}  # fmt: skip
     for fix_id in fixes:
         assert area_of(fix_id) in AREAS, fix_id
