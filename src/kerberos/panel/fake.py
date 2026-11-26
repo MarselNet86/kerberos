@@ -56,6 +56,9 @@ SHAPE_FIELDS = {"tags": {"tags", "xhttpExtraParams"}, "tag": {"tag", "xHttpExtra
 CLIENT_TYPE_HEADER = "x-remnawave-client-type"  # the panel's own web UI sends "browser"
 ADMIN_ONLY_FROM_BROWSER = "For API requests you must create own API-token in the admin dashboard."
 TEMPLATE_NAME = re.compile(r"[A-Za-z0-9_\s-]{2,255}")
+PROFILE_NAME = re.compile(r"[A-Za-z0-9_\s-]{2,30}")  # 2.8.1 and 3.4.11: 2 to 30 characters
+TAG_TAKEN = {"message": "Inbounds with same tag already exists in database. Inbound tags must "
+                        "be unique.", "errorCode": "A113"}  # fmt: skip
 # Scope sections of the endpoints KERBEROS may call: what an API token needs (§7.3).
 SECTIONS = {
     "/nodes": "nodes",
@@ -276,9 +279,15 @@ class FakePanel:
                     == profile["uuid"]
                 ]
             return 200, {"total": len(profiles), "configProfiles": profiles}
+        if method == "POST" and path == "/config-profiles":
+            return self._create_profile(data)
+        if method == "DELETE" and path.startswith("/config-profiles/"):
+            return self._delete_profile(path.rsplit("/", 1)[1])
         if method == "PATCH" and path == "/config-profiles":
             body = self._body(data, {"uuid": str, "config": dict})
             profile = self._find(self.profiles, body["uuid"], "config profile")
+            if self._taken_tags(body["config"], profile["uuid"]):
+                return 409, dict(TAG_TAKEN)
             config = copy.deepcopy(body["config"])
             # The panel stores the config validated and sorted, not byte for byte (§10.4).
             profile["config"] = self.normalize_profile(config) if self.normalize_profile else config
@@ -376,6 +385,60 @@ class FakePanel:
             )
             return 200, copy.deepcopy(self.sub_settings)
         return 404, {"message": f"no route {method} {path}"}
+
+    def _taken_tags(self, config: dict, own: Optional[str]) -> list:
+        """Tags of the config that another profile already has: unique across the panel
+        (`@@unique([tag])` of ConfigProfileInbounds in 2.8.1 and 3.4.11)."""
+        others = {i["tag"] for p in self.profiles if p["uuid"] != own for i in p["inbounds"]}
+        return [i.get("tag") for i in config.get("inbounds") or []
+                if isinstance(i, dict) and i.get("tag") in others]  # fmt: skip
+
+    def _create_profile(self, data: Any) -> tuple[int, Any]:
+        """POST /config-profiles as 2.8.1 and 3.4.11 answer it (K24)."""
+        body = self._body(data, {"name": str, "config": dict})
+        if not PROFILE_NAME.fullmatch(body["name"]):
+            raise ContractError("Name can only contain letters, numbers, underscores, dashes and "
+                                "spaces, 2 to 30 characters")  # fmt: skip
+        if body["name"] == "Default-Profile":
+            return 400, {"message": "This name is reserved by Remnawave.", "errorCode": "A145"}
+        inbounds = body["config"].get("inbounds")
+        tags = [i.get("tag") for i in inbounds or [] if isinstance(i, dict)]
+        if not inbounds or not all(isinstance(t, str) and t and "," not in t for t in tags) \
+                or len(set(tags)) != len(tags):  # fmt: skip
+            # XRayConfig throws, the service answers its generic error.
+            return 500, {"message": "Create config profile error", "errorCode": "A112"}
+        if any(p["name"] == body["name"] for p in self.profiles):
+            return 409, {"message": "Config profile name already exists", "errorCode": "A114"}
+        if self._taken_tags(body["config"], None):
+            return 409, dict(TAG_TAKEN)
+        config = copy.deepcopy(body["config"])
+        profile = {"uuid": new_uuid(), "name": body["name"], "inbounds": [],
+                   "config": self.normalize_profile(config) if self.normalize_profile
+                   else config}  # fmt: skip
+        self._sync_inbounds(profile)
+        self.profiles.append(profile)
+        return 200, {**copy.deepcopy(profile), "nodes": []}
+
+    def _delete_profile(self, ref: str) -> tuple[int, Any]:
+        """The panel stops the nodes of the profile (they keep no profile: SetNull), its
+        hosts lose the profile but stay, its inbounds leave the squads (cascade)."""
+        profile = self._find(self.profiles, ref, "config profile")
+        gone = {i["uuid"] for i in profile["inbounds"]}
+        for node in self.nodes:
+            if (node.get("configProfile") or {}).get("activeConfigProfileUuid") == ref:
+                node["configProfile"] = {"activeConfigProfileUuid": None, "activeInbounds": []}
+                node["isConnected"] = False
+        for host in self.hosts:
+            if (host.get("inbound") or {}).get("configProfileUuid") == ref:
+                host["inbound"] = {"configProfileUuid": None, "configProfileInboundUuid": None}
+        for squad in self.squads:
+            squad["inbounds"] = [
+                i
+                for i in squad.get("inbounds") or []
+                if (i.get("uuid") if isinstance(i, dict) else i) not in gone
+            ]
+        self.profiles = [p for p in self.profiles if p["uuid"] != ref]
+        return self._deleted()
 
     def _patch_node(self, data: Any) -> tuple[int, Any]:
         """Only the inbounds a node runs (K20): the list is replaced as a whole, every inbound

@@ -242,6 +242,17 @@ class PanelClient:
             self.request("PATCH", "/config-profiles", {"uuid": uuid, "config": config})
         )
 
+    def create_profile(self, name: str, config: dict) -> Profile:
+        """A node's own profile (§10.4, K24). Inbound tags are unique across the panel and
+        so is the name: either taken answers 409."""
+        return schema.profile(
+            self.request("POST", "/config-profiles", {"name": name, "config": config})
+        )
+
+    def delete_profile(self, uuid: str) -> None:
+        """The panel stops every node of the profile; hosts on it lose their profile."""
+        self.request("DELETE", f"/config-profiles/{uuid}")
+
     def patch_node_inbounds(self, uuid: str, profile_uuid: str, inbounds: list[str]) -> Node:
         """The inbounds a node runs (§10.4, K20). The panel replaces the whole list, every
         inbound must be one of the profile's, and the node restarts."""

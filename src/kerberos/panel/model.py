@@ -85,6 +85,7 @@ class Squad:
     uuid: str
     name: str
     inbound_uuids: list[str] = field(default_factory=list)
+    members: Optional[int] = None  # info.membersCount: how many users the squad has
 
 
 @dataclass
