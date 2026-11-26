@@ -8,7 +8,7 @@ import sys
 import uuid
 
 import pytest
-from agent_helpers import ROOT, call
+from agent_helpers import APT_INSTALL, ROOT, call
 
 from kerberos import agent
 
@@ -154,7 +154,7 @@ def test_watch_installs_and_rolls_back(plain, recorder):
     assert read(plain, agent.WATCH_CRON) == f"*/5 * * * * root {agent.WATCH_BIN} >/dev/null 2>&1\n"
     rotate = read(plain, agent.WATCH_ROTATE)
     assert rotate.startswith(agent.WATCH_LOG) and "monthly" in rotate
-    assert ["apt-get", "install", "-y", "-q", "cron", "logrotate"] in recorder.calls
+    assert [*APT_INSTALL, "cron", "logrotate"] in recorder.calls
     assert agent.collect_facts(plain)["watch"]["installed"] is True
     code, _answer = call(plain, ["rollback", change])
     assert code == 0

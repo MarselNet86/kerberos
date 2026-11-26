@@ -6,7 +6,7 @@ import stat
 import uuid
 
 import pytest
-from agent_helpers import Recorder, call
+from agent_helpers import APT_INSTALL, Recorder, call
 
 from kerberos import agent
 
@@ -106,7 +106,7 @@ def test_rollback_restores_bytes_and_modes(node):
 def test_fail2ban_installs_packages_and_removes_on_rollback(node, recorder):
     change, code, _answer = apply(node, "fail2ban.sshd", {"sshPorts": [22]})
     assert code == 0
-    assert ["apt-get", "install", "-y", "-q", "fail2ban", "python3-systemd"] in recorder.calls
+    assert [*APT_INSTALL, "fail2ban", "python3-systemd"] in recorder.calls
     call(node, ["rollback", change])
     assert ["apt-get", "remove", "-y", "-q", "fail2ban"] in recorder.calls
 

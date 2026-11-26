@@ -37,7 +37,7 @@ import time
 from typing import Any, Callable, Optional
 
 PROTOCOL = 1
-AGENT_VERSION = "0.10.1"
+AGENT_VERSION = "0.10.2"
 AGENT_PATH = "/usr/local/sbin/kerberos-agent"
 STATE_DIR = "/var/lib/kerberos"
 
@@ -75,15 +75,19 @@ class Result:
 
 
 def run_command(argv: list[str], input: Optional[str] = None, timeout: float = 120) -> Result:
+    # No command reads the SSH channel: a prompt gets EOF at once instead of waiting.
+    stdin = {"input": input} if input is not None else {"stdin": subprocess.DEVNULL}
+    env = dict(os.environ, LC_ALL="C", LANG="C", DEBIAN_FRONTEND="noninteractive")
+    env["UCF_FORCE_CONFFOLD"] = "1"  # ucf keeps the person's file too, like dpkg (§10.3)
     try:
         proc = subprocess.run(
             argv,
-            input=input,
+            **stdin,
             capture_output=True,
             text=True,
             timeout=timeout,
             check=False,
-            env=dict(os.environ, LC_ALL="C", LANG="C", DEBIAN_FRONTEND="noninteractive"),
+            env=env,
         )
     except FileNotFoundError:
         return Result(127, "", f"{argv[0]}: not found")
@@ -1303,16 +1307,62 @@ def undo_error(error: AgentError, problems: list) -> AgentError:
     return AgentError("command_failed", f"{error.code}; undo failed: {'; '.join(problems)}")
 
 
+DPKG_STATUS = "/var/lib/dpkg/status"
+DPKG_UPDATES = "/var/lib/dpkg/updates"
+# dpkg asks what to do with a config file the person already has (certbot's
+# /etc/letsencrypt/cli.ini, nginx.conf): DEBIAN_FRONTEND does not cover that prompt, it
+# reads EOF and fails the install. Default answer, else keep the person's file.
+DPKG_KEEP_CONFIG = ["--force-confdef", "--force-confold"]
+APT_KEEP_CONFIG = ["-o", "Dpkg::Options::=--force-confdef",
+                   "-o", "Dpkg::Options::=--force-confold"]  # fmt: skip
+# Unpacked, not configured: `dpkg -l` iU, iF, iW, iT.
+UNFINISHED = ("unpacked", "half-configured", "triggers-awaited", "triggers-pending")
+
+
+def unfinished_packages(status: str) -> list:
+    """Packages of /var/lib/dpkg/status that dpkg unpacked but did not configure."""
+    names = []
+    for stanza in re.split(r"\n\s*\n", status):
+        fields = dict(re.findall(r"^([A-Za-z-]+):[ \t]*(.*)$", stanza, re.M))
+        words = fields.get("Status", "").split()
+        if fields.get("Package") and len(words) == 3 and words[2] in UNFINISHED:
+            names.append(fields["Package"])
+    return names
+
+
+def needs_package(system: System, package: str, binary: str) -> bool:
+    """Not there, or left half-configured (an install that failed earlier)."""
+    return not system.exists(binary) or package in unfinished_packages(
+        system.read(DPKG_STATUS) or ""
+    )
+
+
+def dpkg_unfinished(system: System) -> bool:
+    """Something to configure first: a killed dpkg leaves its journal in updates/, and
+    apt-get then refuses to install anything until `dpkg --configure -a`."""
+    try:
+        journal = os.listdir(system.path(DPKG_UPDATES))
+    except OSError:
+        journal = []
+    return bool(journal) or bool(unfinished_packages(system.read(DPKG_STATUS) or ""))
+
+
 def install_packages(system: System, packages: list) -> None:
-    """At most APT_TIMEOUT for the whole install, so KERBEROS knows how long to wait."""
+    """At most APT_TIMEOUT for the whole install, so KERBEROS knows how long to wait.
+
+    The person's config files stay as they are, and packages an earlier install left
+    half-configured are configured first, with the same answer."""
     if not packages:
         return
-    argv = ["apt-get", "install", "-y", "-q", *packages]
+    argv = ["apt-get", "install", "-y", "-q", *APT_KEEP_CONFIG, *packages]
     deadline = time.monotonic() + APT_TIMEOUT
 
     def left() -> float:
         return max(1.0, deadline - time.monotonic())
 
+    if dpkg_unfinished(system):
+        # Its own result does not matter: apt-get configures what is left and fails if not.
+        system.run(["dpkg", *DPKG_KEEP_CONFIG, "--configure", "-a"], timeout=left())
     if system.run(argv, timeout=left()).ok:
         return
     system.run(["apt-get", "update", "-q"], timeout=left())
@@ -1661,7 +1711,7 @@ def service_back(unit: str, enabled: bool, active: bool, start: str = "restart")
 def nft_service(plan: Plan, name: str, table: str, rules: list, about: str,
                 system: Optional[System] = None) -> None:  # fmt: skip
     # Debian cloud images come without nft; the package stays after a rollback.
-    missing = system is not None and not system.exists("/usr/sbin/nft")
+    missing = system is not None and needs_package(system, "nftables", "/usr/sbin/nft")
     if missing and "nftables" not in plan.packages:
         plan.packages.append("nftables")
     conf = f"/etc/kerberos/{name}.nft"
@@ -1756,9 +1806,9 @@ def fix_fail2ban(system: System, params: dict) -> Plan:
     panel = address_param(system, params)
     installed = system.exists("/usr/bin/fail2ban-client")
     plan = Plan("fail2ban.sshd")
-    if not installed:
+    if needs_package(system, "fail2ban", "/usr/bin/fail2ban-client"):
         plan.packages.append("fail2ban")
-    if not system.exists("/usr/lib/python3/dist-packages/systemd"):
+    if needs_package(system, "python3-systemd", "/usr/lib/python3/dist-packages/systemd"):
         plan.packages.append("python3-systemd")
     # Our file is read last and its ignoreip replaces the person's whitelist: keep it.
     configs = [(name, text) for name, text in fail2ban_files(system) if name != JAIL_FILE]
@@ -3495,9 +3545,9 @@ def fix_site(system: System, params: dict) -> Plan:
     served = tuple(f"[{n}]" if ":" in n else n for n in names)
     had_nginx = system.exists("/usr/sbin/nginx")
     plan = Plan("self_steal.site")
-    if not had_nginx:
+    if needs_package(system, "nginx", "/usr/sbin/nginx"):
         plan.packages.append("nginx")
-    if not system.exists("/usr/bin/certbot"):
+    if needs_package(system, "certbot", "/usr/bin/certbot"):
         plan.packages.append("certbot")
     page = site_html(seed, domain)
     plan.step_write(f"{ACME_ROOT}/.kerberos", "acme webroot of KERBEROS\n")
@@ -3770,7 +3820,7 @@ def fix_watch(system: System, params: dict) -> Plan:
     plan = Plan("watch.install")
     # Minimal Debian images come without cron; logrotate keeps the log small.
     for package, binary in (("cron", "/usr/sbin/cron"), ("logrotate", "/usr/sbin/logrotate")):
-        if not system.exists(binary):
+        if needs_package(system, package, binary):
             plan.packages.append(package)
     plan.write(WATCH_BIN, WATCH_SCRIPT, 0o755)
     plan.write(WATCH_CRON, f"*/5 * * * * root {WATCH_BIN} >/dev/null 2>&1\n")
