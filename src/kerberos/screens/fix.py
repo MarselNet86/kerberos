@@ -101,6 +101,15 @@ def extra_warnings(app: App, session: Session, item: PlanItem) -> list[str]:
         return []
     texts = [t("fix.profile.warning")]
     node = session.data["input"].node_data(item.node_uuid or "")
+    own = item.params.get("ownProfile")
+    if own:
+        name = app.mask(app.session_name(item.node_uuid))
+        shared = item.params.get("sharedProfile")
+        texts.append(
+            t("fix.own_profile.warning", node=name, shared=shared, profile=own)
+            if shared
+            else t("fix.own_profile.warning.none", node=name, profile=own)
+        )
     facts = node.facts if node else {}
     if not (facts.get("remnanode") or {}).get("letsencryptMounted", True):
         texts.append(t("fix.mount.warning", node=app.mask(node.node.name)))
@@ -145,7 +154,7 @@ def dns_state(app: App, session: Session, item: PlanItem) -> None:
     ok = bool(want4) and v4 == [want4] and (not v6 or bool(set(v6) & set(want6)))
     item.params["dns"] = "ok" if ok else "wait"
     item.params["record"] = f"A {domain} → {want4}"
-    if ok and item.blocked is None:
+    if ok and item.blocked is None and not waits_for_squads(item):
         item.selected = True
 
 
@@ -246,6 +255,36 @@ def confirm_edges(app: App, session: Session, item: PlanItem) -> None:
             item.selected = True
 
 
+def choose_squads(app: App, session: Session, item: PlanItem) -> None:
+    """§10.4 (K24): the squads whose users get the node, when none holds its inbounds."""
+    from kerberos.fixes.own_profile import suggested_squads
+
+    node = session.snapshot.node(item.node_uuid or "")
+    squads = list(session.snapshot.squads)
+    chosen = set(item.params.get("squads") or suggested_squads(session.snapshot, node))
+    rows = [[s.name, "" if s.members is None else str(s.members)] for s in squads]
+    table = Checklist(rows, [t("plan.squads.col.name"), t("plan.squads.col.members")],
+                      selected={i for i, s in enumerate(squads) if s.uuid in chosen})  # fmt: skip
+
+    def body(_w: int, height: int) -> RenderableType:
+        table.viewport = max(4, height - 6)
+        return Group(Text(t("plan.squads.title", node=app.mask(node.name)), style="bold"),
+                     Text(t("plan.squads.hint"), style="muted"), table)  # fmt: skip
+
+    def handle(key: str) -> Optional[str]:
+        if key == "esc":
+            return "back"
+        result = table.handle(key)
+        return "done" if result == "done" and table.selected else None
+
+    keys = ((t("keys.space"), t("keys.toggle")), ("Enter", t("plan.squads.confirm")),
+            ("Esc", t("keys.back")))  # fmt: skip
+    if app.interact(t("plan.title"), body, keys, handle) == "done":
+        item.params["squads"] = [s.uuid for i, s in enumerate(squads) if i in table.selected]
+        if item.blocked is None and item.params.get("dns") == "ok":
+            item.selected = True
+
+
 def ask_domain(app: App, session: Session, item: PlanItem) -> None:
     node = session.snapshot.node(item.node_uuid or "")
     data = session.data["input"].node_data(item.node_uuid or "")
@@ -285,7 +324,8 @@ def fix_label(app: App, item: Any) -> str:
     spare = params.get("reserve")
     label = t(f"fix.{fix_id}.label", ports=ports, port=params.get("port", ""),
               domain=params.get("domain") or "…", nets=len(params.get("nets") or []),
-              reserve=app.session_name(spare) if spare else "")  # fmt: skip
+              reserve=app.session_name(spare) if spare else "",
+              profile=params.get("profile", ""))  # fmt: skip
     return app.mask(label)
 
 
@@ -349,9 +389,14 @@ def new_site(session: Session, item: PlanItem) -> None:
     item.params["siteSeed"] = free_site_seed(used, rng)
 
 
+def waits_for_squads(item: PlanItem) -> bool:
+    """K24: no squad holds the node's inbounds and the panel has several: the person picks."""
+    return bool(item.params.get("pickSquads")) and not item.params.get("squads")
+
+
 def waits_for_input(item: PlanItem) -> bool:
     if item.fix_id == "self_steal":
-        return item.params.get("dns") != "ok"
+        return item.params.get("dns") != "ok" or waits_for_squads(item)
     if item.fix_id == "cdn.edge_only":
         return not item.params.get("nets")
     if item.fix_id == "panel.portal":
@@ -435,10 +480,23 @@ NEEDS = {"self_steal": "plan.need_domain", "cdn.edge_only": "plan.need_edges",
          "panel.portal": "plan.need_portal"}  # fmt: skip
 
 
+def need_of(item: PlanItem) -> str:
+    """What a marked row still waits for: the domain, then the squads (K24)."""
+    if item.fix_id == "self_steal" and item.params.get("dns") == "ok" and waits_for_squads(item):
+        return t("plan.need_squads")
+    return t(NEEDS[item.fix_id])
+
+
+def blocked_text(item: PlanItem) -> str:
+    if item.blocked == "shared_other":
+        return t("plan.blocked.shared_other", tags=", ".join(item.params.get("otherInbounds", [])))
+    return t(f"plan.blocked.{item.blocked}")
+
+
 def note_of(app: App, item: PlanItem) -> str:
     """The «Заметка» of a row: why it is off, what it waits for, its reserve."""
     if item.blocked:
-        return t(f"plan.blocked.{item.blocked}")
+        return blocked_text(item)
     note = ""
     if item.fix_id == "self_steal":
         state = item.params.get("dns")
@@ -478,6 +536,12 @@ def plan_details(app: App, session: Session, item: PlanItem) -> RenderableType:
             # The record to make, in full: the table column is too narrow for it.
             lines.append(Text(t("plan.domain.wait", record=app.mask(item.params["record"])),
                               style="risk.medium"))  # fmt: skip
+        if item.fix_id == "self_steal" and item.params.get("ownProfile"):
+            lines.append(Text(own_profile_line(app, session, item), style="muted"))
+        if item.fix_id == "self_steal" and item.params.get("squads") and item.params.get(
+                "pickSquads"):  # fmt: skip
+            names = [s.name for s in session.snapshot.squads if s.uuid in item.params["squads"]]
+            lines.append(Text(t("plan.squads.chosen", names=", ".join(names)), style="muted"))
         if item.fix_id == "self_steal":
             lines.append(site_preview(app, session, item))
             renewals = node_renewals(session, item.target)
@@ -488,6 +552,23 @@ def plan_details(app: App, session: Session, item: PlanItem) -> RenderableType:
         if warning:
             lines.append(Text(t("plan.details.warning", text=warning), style="muted"))
     return Clamp(Group(*lines), DETAILS_LINES, pad=True)
+
+
+def own_profile_line(app: App, session: Session, item: PlanItem) -> str:
+    """«Свой профиль «KERBEROS NL-1» вместо общего «Default» (с de-1, nl-2)» (K24)."""
+    own = item.params["ownProfile"]
+    shared = item.params.get("sharedProfile")
+    if not shared:
+        return t("plan.own_profile.none", profile=own)
+    node = session.snapshot.node(item.node_uuid or "")
+    profile = session.snapshot.node_profile(node) if node else None
+    others = [
+        n.name
+        for n in session.snapshot.nodes
+        if profile and n.uuid in profile.node_uuids and n.uuid != item.node_uuid
+    ]
+    return t("plan.own_profile", profile=own, shared=shared,
+             nodes=app.mask(where(others)))  # fmt: skip
 
 
 @dataclass
@@ -573,13 +654,15 @@ def domain_row(app: App, session: Session, items: list[PlanItem], row: PlanRow) 
     dns = item.params.get("dns")
     if item.blocked:
         state = Text(t("plan.domain.blocked"), style="muted")
-        note = Text(t(f"plan.blocked.{item.blocked}"))
+        note = Text(blocked_text(item))
     else:
         state = {"ok": Text(t("plan.domain.ok"), style="ok"),
                  "wait": Text("… " + t("plan.domain.waiting"), style="risk.medium")}.get(
             dns, Text(t("plan.domain.none"), style="risk.medium"))  # fmt: skip
         if dns == "wait":
             note = Text(t("plan.domain.record", record=app.mask(item.params.get("record", ""))))
+        elif dns == "ok" and waits_for_squads(item):
+            note = Text(t("plan.domain.squads"), style="risk.medium")
         elif not domain:
             note = Text("")  # the reserve matters once the node has its domain
         elif item.params.get("reserve"):
@@ -722,7 +805,7 @@ def step_plan(app: App, session: Session) -> Any:
         for item in free:
             item.selected = on and item not in waiting
         if on and waiting:
-            state["error"] = t(NEEDS[waiting[0].fix_id])
+            state["error"] = need_of(waiting[0])
 
     def input_item(row: Optional[PlanRow], fix_id: str) -> Optional[PlanItem]:
         """The item a key of input works on: the row's own, or the first of its group."""
@@ -760,6 +843,9 @@ def step_plan(app: App, session: Session) -> Any:
         if hotkey(key) == "r" and free and not xui:
             choose_reserve(app, session, items, item)
             return None
+        if hotkey(key) == "u" and free and item.params.get("pickSquads"):
+            choose_squads(app, session, item)
+            return None
         edges = input_item(row, "cdn.edge_only")
         if hotkey(key) == "e" and edges is not None:
             confirm_edges(app, session, edges)
@@ -778,7 +864,7 @@ def step_plan(app: App, session: Session) -> Any:
         if key == "enter":
             for chosen in items:
                 if chosen.selected and not chosen.blocked and waits_for_input(chosen):
-                    state["error"] = t(NEEDS[chosen.fix_id])
+                    state["error"] = need_of(chosen)
                     return None
             for chosen in items:
                 if chosen.fix_id == "reserve" and chosen.selected and not pair_ready(items, chosen):
@@ -797,6 +883,8 @@ def step_plan(app: App, session: Session) -> Any:
                 hints.append(("d", t("keys.domain")))
                 if not xui:
                     hints.append(("r", t("keys.reserve")))
+                if items[row.indexes[0]].params.get("pickSquads"):
+                    hints.append(("u", t("keys.squads")))
                 hints.append(("g", t("keys.site")))
             hints.append((t("keys.space"), t("keys.toggle")))
         elif row is not None:
@@ -855,6 +943,10 @@ def area_changes(app: App, session: Session, chosen: list[PlanItem]) -> list[tup
                                     f"({app.mask(app.session_name(i.node_uuid))})"
                                     for i in steals)  # fmt: skip
                 parts.append(t("consent.domain.xui" if xui else "consent.domain", domains=domains))
+            owns = [f"{app.mask(app.session_name(i.node_uuid))} → {i.params['ownProfile']}"
+                    for i in steals if i.params.get("ownProfile")]  # fmt: skip
+            if owns:
+                parts.append(t("consent.own_profile", profiles=", ".join(owns)))
             for pair in (i for i in found if i.fix_id == "reserve"):
                 parts.append(
                     app.mask(

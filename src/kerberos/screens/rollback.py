@@ -46,6 +46,7 @@ def label(app: App, run: dict, change: dict) -> str:
         port=change["params"].get("port", ""),
         domain=change["params"].get("domain", ""),
         reserve=(node_of(run, f"node:{change['params'].get('reserve')}") or {}).get("name", ""),
+        profile=change["params"].get("profile", ""),
     )
     return f"{app.mask(name)}: {app.mask(text)}"
 
