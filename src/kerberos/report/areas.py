@@ -20,6 +20,7 @@ FIX_AREA = {
     "self_steal": "domain",
     "self_steal.site": "domain",
     "node.letsencrypt_mount": "domain",
+    "self_steal.own_profile": "domain",
     "self_steal.profile": "domain",
     "self_steal.node": "domain",
     "self_steal.squads": "domain",

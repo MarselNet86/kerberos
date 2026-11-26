@@ -89,6 +89,25 @@ def hysteria_host(
     return fields
 
 
+def fresh_host(remark: str, address: str, port: int, domain: str, profile_uuid: str,
+               inbound_uuid: str) -> dict:  # fmt: skip
+    """A host without a model (K24): the node had no Reality host to copy (§10.4)."""
+    return {
+        "inbound": {"configProfileUuid": profile_uuid, "configProfileInboundUuid": inbound_uuid},
+        "remark": remark,
+        "address": address,
+        "port": port,
+        "sni": domain,
+        "fingerprint": "firefox",
+        "isDisabled": False,
+        "isHidden": False,
+        "overrideSniFromAddress": False,
+        "keepSniBlank": False,
+        "tags": [],
+        "xhttpExtraParams": None,
+    }
+
+
 def mismatches(sent: dict, got: Host) -> list[str]:
     """Fields the panel stored differently from what KERBEROS sent."""
     checks = {

@@ -19,6 +19,7 @@ from kerberos.panel.client import PanelClient
 from kerberos.panel.errors import PanelError
 
 PANEL_FIXES = {
+    "self_steal.own_profile",
     "self_steal.profile",
     "self_steal.node",
     "self_steal.squads",
@@ -129,6 +130,8 @@ def undo(client: PanelClient, change: dict,
             return undo_padding(client, change, ask)
         if fix_id == "self_steal.profile":
             return undo_profile(client, change, ask)
+        if fix_id == "self_steal.own_profile":
+            return undo_own_profile(client, change, ask)
     except PanelError as exc:
         return exc.code
     return "unknown_change"
@@ -193,8 +196,11 @@ def undo_templates(client: PanelClient, details: dict,
 
 
 def undo_squads(client: PanelClient, details: dict) -> Optional[str]:
-    """Only the inbound KERBEROS added leaves each squad; what others added since stays."""
+    """Only the inbounds KERBEROS added leave each squad: those it lacked before. What
+    others added since stays."""
     added = details.get("added")
+    if isinstance(added, str):
+        added = [added]  # one uuid in journals before v29
     squads = {s.uuid: s for s in client.squads()} if details.get("squads") else {}
     for uuid, before in (details.get("squads") or {}).items():
         squad = squads.get(uuid)
@@ -202,8 +208,10 @@ def undo_squads(client: PanelClient, details: dict) -> Optional[str]:
             continue  # deleted since: nothing to put back
         if added is None:
             client.patch_squad(uuid, before)  # a journal before v18 knows only the old list
-        elif added in squad.inbound_uuids:
-            client.patch_squad(uuid, [i for i in squad.inbound_uuids if i != added])
+            continue
+        mine = [a for a in added if a not in before and a in squad.inbound_uuids]
+        if mine:
+            client.patch_squad(uuid, [i for i in squad.inbound_uuids if i not in mine])
     return None
 
 
@@ -213,12 +221,59 @@ def undo_node(client: PanelClient, change: dict) -> Optional[str]:
     details = change["details"]
     added = set(details.get("added") or [])
     node = next((n for n in client.nodes() if n.uuid == change["params"].get("node")), None)
+    if "beforeProfile" in details:
+        return undo_move(client, node, details)
     if node is None or not added & set(node.inbound_uuids):
         return None  # deleted since, or the request never landed: nothing to take out
     if node.profile_uuid != details.get("profileUuid"):
         return None
     client.patch_node_inbounds(node.uuid, node.profile_uuid,
                                [u for u in node.inbound_uuids if u not in added])  # fmt: skip
+    return None
+
+
+def undo_move(client: PanelClient, node: Any, details: dict) -> Optional[str]:
+    """K24: the node back on the profile it left, with the inbounds it ran there. A node
+    moved elsewhere since, or that never moved, is left alone; one that had no profile
+    stays on its own until the undo of that profile deletes it (and so takes it away)."""
+    if node is None or node.profile_uuid != details.get("profileUuid"):
+        return None
+    before = details.get("beforeProfile")
+    if before is None:
+        return None
+    profile = next((p for p in client.profiles() if p.uuid == before), None)
+    if profile is None:
+        return "gone"
+    known = {i.uuid for i in profile.inbounds}
+    client.patch_node_inbounds(node.uuid, before,
+                               [u for u in details.get("before") or [] if u in known])  # fmt: skip
+    return None
+
+
+def undo_own_profile(client: PanelClient, change: dict,
+                     ask: Optional[Callable[[str], bool]]) -> Optional[str]:  # fmt: skip
+    """K24: the node's own profile goes, last of the panel steps. Deleting it stops every
+    node on it and leaves its hosts without a profile, so a node or a host that is not
+    KERBEROS's keeps it there (`profile_in_use`); the node that had no profile may stay on
+    it: the delete takes it back to none."""
+    details = change["details"]
+    uuid = details.get("profileUuid")
+    profiles = client.profiles()
+    current = next((p for p in profiles
+                    if (p.uuid == uuid if uuid else p.name == details.get("name"))),
+                   None)  # fmt: skip
+    if current is None:
+        return None  # never created, or deleted since
+    allowed = set() if details.get("sharedUuid") else {change["params"].get("node")}
+    if set(current.node_uuids) - allowed:
+        return "profile_in_use"
+    if any(h.profile_uuid == current.uuid for h in client.hosts()):
+        return "profile_in_use"
+    if details.get("written") and digest(current.config) != details["written"]:
+        written = load_snapshot(details.get("writtenPath"))
+        if ask is None or not ask(diff_text(written, current.config)):
+            return "changed_in_panel"
+    client.delete_profile(current.uuid)
     return None
 
 
