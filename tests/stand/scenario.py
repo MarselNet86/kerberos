@@ -10,6 +10,7 @@ nftables, fail2ban and, on Ubuntu 22.04, switches ufw on for a moment.
 
 from __future__ import annotations
 
+import glob
 import json
 import os
 import shutil
@@ -207,6 +208,71 @@ def edge_filter() -> None:
         subprocess.run(["systemctl", "reload", "nginx"], check=False)
 
 
+CLI_INI = "/etc/letsencrypt/cli.ini"
+# The person's own file. Its ACME server is a closed local port: certbot fails at once,
+# no request leaves the VM, and that it went there shows the file was in use.
+CLI_TEXT = "# the person's own settings\nserver = https://127.0.0.1:9/directory\n"
+STAND_DOMAIN = "stand.example.com"
+
+
+def dpkg_state(package: str) -> str:
+    """`dpkg -l` letters: ii installed, iU unpacked, iF half-configured; '' not known."""
+    out = subprocess.run(["dpkg-query", "-W", "-f=${db:Status-Abbrev}", package],
+                         capture_output=True, text=True, check=False)  # fmt: skip
+    return out.stdout.strip() if out.returncode == 0 else ""
+
+
+def certbot_conffile() -> None:
+    """K24 stand: /etc/letsencrypt/cli.ini is there before self-steal installs certbot
+    (tech.md §10.3). dpkg asks about it, and an install that cannot answer leaves certbot
+    half-configured. The agent must keep the file, and configure such a certbot."""
+    env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
+
+    def fresh() -> None:
+        subprocess.run(["apt-get", "purge", "-y", "-q", "certbot"], env=env,
+                       capture_output=True, check=False)  # fmt: skip
+        os.makedirs(os.path.dirname(CLI_INI), exist_ok=True)
+        with open(CLI_INI, "w") as fh:
+            fh.write(CLI_TEXT)
+
+    def site(name: str) -> None:
+        code, answer = agent("apply", "self_steal.site", str(uuid.uuid4()),
+                             payload={"domain": STAND_DOMAIN, "siteSeed": 1})  # fmt: skip
+        # certbot_failed: the install went through and the site step reached certbot.
+        report(f"{name}: certbot installs", code != 0
+               and answer.get("error", {}).get("code") == "certbot_failed"
+               and dpkg_state("certbot") == "ii",
+               f"{dpkg_state('certbot')} {json.dumps(answer)}")  # fmt: skip
+        report(f"{name}: the person's cli.ini stays", open(CLI_INI).read() == CLI_TEXT)
+        report(f"{name}: the site went back", not any(
+            STAND_DOMAIN in s["serverNames"] for s in facts()["nginx"]["sites"]))  # fmt: skip
+
+    try:
+        fresh()
+        site("cli.ini before certbot")
+        fresh()
+        # What the agent did before: nobody answers dpkg, stdin at EOF.
+        old = subprocess.run(["apt-get", "install", "-y", "-q", "certbot"], env=env,
+                             stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                             check=False)  # fmt: skip
+        if "conffile prompt" not in old.stdout + old.stderr:
+            # certbot of this OS ships no cli.ini: leave it unpacked another way.
+            print("note  certbot here has no cli.ini conffile: unpacking it instead")
+            fresh()
+            subprocess.run(["apt-get", "install", "-y", "-q", "--download-only", "certbot"],
+                           env=env, capture_output=True, check=False)  # fmt: skip
+            debs = sorted(glob.glob("/var/cache/apt/archives/certbot_*.deb"))
+            if debs:
+                subprocess.run(["dpkg", "--unpack", debs[-1]], capture_output=True, check=False)
+        state = dpkg_state("certbot")
+        report("certbot left half-configured", state in ("iU", "iF"), state)
+        site("half-configured certbot")
+    finally:
+        for path in (CLI_INI, CLI_INI + ".dpkg-dist"):  # the domain cycle takes the default
+            if os.path.exists(path):
+                os.remove(path)
+
+
 def main() -> int:
     if os.geteuid() != 0:
         print("run as root on a stand VM")
@@ -248,6 +314,7 @@ def main() -> int:
            watch.stderr.decode()[-300:])  # fmt: skip
     agent("rollback", change)
     edge_filter()
+    certbot_conffile()
 
     if before["nodeApi"]["port"] and before["remnanode"].get("network") == "host":
         cycle("node_api.panel_only", {"port": before["nodeApi"]["port"], "panelIp": PANEL},

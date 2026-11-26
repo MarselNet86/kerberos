@@ -11,6 +11,10 @@ from typing import Optional
 from kerberos import agent
 
 ROOT = Path(__file__).resolve().parent.parent.parent
+# apt-get install of the agent (tech.md §10.3): the person's config files stay, no prompt.
+APT_INSTALL = ["apt-get", "install", "-y", "-q",
+               "-o", "Dpkg::Options::=--force-confdef",
+               "-o", "Dpkg::Options::=--force-confold"]  # fmt: skip
 
 
 class Recorder:

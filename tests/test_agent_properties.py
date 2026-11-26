@@ -27,3 +27,27 @@ def test_other_parsers_never_crash(value):
     agent.parse_ip_addr(value)
     agent.parse_remnanode(value)
     agent.template_hash(value)
+
+
+@given(text)
+def test_dpkg_status_parser_never_crashes(value):
+    for name in agent.unfinished_packages(value):
+        assert name
+
+
+STATES = ["installed", "config-files", "not-installed", "half-installed", "unpacked",
+          "half-configured", "triggers-awaited", "triggers-pending"]  # fmt: skip
+names = st.from_regex(r"[a-z0-9][a-z0-9+.-]{0,20}", fullmatch=True)
+
+
+@given(st.lists(st.tuples(names, st.sampled_from(STATES)), max_size=12))
+def test_dpkg_status_finds_exactly_the_unconfigured(packages):
+    """`dpkg -l` iU, iF, iW, iT and nothing else, whatever the other fields say."""
+    status = "\n".join(
+        f"Package: {name}\nStatus: install ok {state}\nPriority: optional\n"
+        f"Description: {state} package\n continued line: Status: install ok unpacked\n"
+        for name, state in packages
+    )
+    unconfigured = ("unpacked", "half-configured", "triggers-awaited", "triggers-pending")
+    expected = [name for name, state in packages if state in unconfigured]
+    assert agent.unfinished_packages(status) == expected

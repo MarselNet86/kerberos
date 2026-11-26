@@ -6,7 +6,7 @@ import stat
 import uuid
 
 import pytest
-from agent_helpers import call
+from agent_helpers import APT_INSTALL, call
 
 from kerberos import agent
 
@@ -45,7 +45,7 @@ def apply(system, fix_id, params):
 def test_site_steps_in_order(node, recorder):
     change, code, answer = apply(node, "self_steal.site", {"domain": DOMAIN, "siteSeed": 2})
     assert code == 0, answer
-    assert ["apt-get", "install", "-y", "-q", "nginx", "certbot"] in recorder.calls
+    assert [*APT_INSTALL, "nginx", "certbot"] in recorder.calls
     queries = (["is-enabled"], ["is-active"])  # the state of nginx, read before anything
     calls = [c for c in recorder.calls
              if c[0] in ("nginx", "certbot", "systemctl") and c[1:2] not in queries]  # fmt: skip
