@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 DEFAULT_ROOT = Path("/var/lib/kerberos")
 LOCK_STEP = 5.0  # seconds between two tries of a lock that is busy
+ADMIN_MODES = ("mine", "create")  # the answers of §8.5 that are remembered (K25)
 
 
 class Locked(Exception):
@@ -80,6 +81,10 @@ class State:
     @property
     def runs(self) -> Path:
         return self.root / "runs"
+
+    @property
+    def answers_file(self) -> Path:
+        return self.root / "answers.json"
 
     def ensure(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -152,6 +157,39 @@ class State:
         token = self.read_panel_token()
         if token and not self.panel_token_can_write():
             self.write_panel_token(token, True)
+
+    # -- answers.json (K25) -----------------------------------------------------
+    def answers(self) -> dict:
+        """What the person answered before (§5.4): {whois: bool, admin: {mode, keys}}.
+
+        Only well formed values come back: `admin.mode` is `mine` or `create`, and its
+        keys are fingerprints, never the key lines (their comments may be an email)."""
+        try:
+            data = json.loads(self.answers_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        answers: dict = {}
+        if isinstance(data.get("whois"), bool):
+            answers["whois"] = data["whois"]
+        admin = data.get("admin")
+        if isinstance(admin, dict) and admin.get("mode") in ADMIN_MODES:
+            keys = [k for k in admin.get("keys") or []
+                    if isinstance(k, str) and k.startswith("SHA256:")]  # fmt: skip
+            answers["admin"] = {"mode": admin["mode"], "keys": keys}
+        return answers
+
+    def remember(self, **answers: object) -> None:
+        """Keep answers for the next runs; None forgets one."""
+        data = self.answers()
+        for name, value in answers.items():
+            if value is None:
+                data.pop(name, None)
+            else:
+                data[name] = value
+        self.ensure()
+        self.write_private(self.answers_file, json.dumps(data, ensure_ascii=False) + "\n")
 
     def public_key(self, admin: bool = False) -> Optional[str]:
         path = (self.admin_key if admin else self.key).with_suffix(".pub")
