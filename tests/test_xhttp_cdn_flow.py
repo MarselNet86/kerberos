@@ -180,7 +180,9 @@ def test_padding_comes_out_exactly_as_it_went_in(items, tags, seed):
 def test_padding_fields_shapes(seed):
     fields = xhttp.padding_fields(random.Random(seed))
     assert set(fields) == set(xhttp.PADDING_KEYS)
-    assert fields["xPaddingBytes"] == "100-1000" and fields["xPaddingObfsMode"] is True
+    low, high = (int(x) for x in fields["xPaddingBytes"].split("-"))
+    assert 64 <= low <= 256 and 768 <= high <= 1536, "random per inbound (K26)"
+    assert fields["xPaddingObfsMode"] is True
     assert fields["xPaddingPlacement"] == "queryInHeader" and fields["xPaddingMethod"] == "tokenish"
     key, header = fields["xPaddingKey"], fields["xPaddingHeader"]
     assert key.isalpha() and key.islower() and 6 <= len(key) <= 10

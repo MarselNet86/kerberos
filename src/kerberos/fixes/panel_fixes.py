@@ -12,6 +12,7 @@ import uuid as uuidlib
 from typing import Any, Optional
 
 from kerberos.fixes import subscription, xhttp
+from kerberos.fixes.hosts import fingerprint_of
 from kerberos.fixes.journal import iso
 from kerberos.fixes.model import ROLLBACK_FAILED, Change, is_applied
 from kerberos.fixes.panel_changes import diff_text, digest, load_snapshot, save_snapshot, undo
@@ -91,16 +92,22 @@ class PanelFixes:
         result = {}
         try:
             existing = {t.name: t for t in self.client.templates()}
+            rng = random.Random("probe") if self.env.demo else random.SystemRandom()
             for kind, name in (("reserve", subscription.RESERVE_NAME),
                                ("single", subscription.SINGLE_NAME)):  # fmt: skip
-                wanted = subscription.build(kind, self.fleet_domains())
                 current = existing.get(name)
+                if current is not None:
+                    current = self.client.template(current.uuid)
+                # The probe of the reserve is this panel's own (K26): kept once chosen.
+                probe = subscription.own_probe(current.json if current else None)
+                if kind == "reserve" and probe is None:
+                    probe = subscription.new_probe(rng)
+                wanted = subscription.build(kind, self.fleet_domains(), probe)
                 if current is None:
                     current = self.client.create_template(name)
                     details["templates"][current.uuid] = {"created": True, "previousPath": None}
                     self.engine.save()
                 else:
-                    current = self.client.template(current.uuid)
                     if current.json == wanted:
                         result[kind] = current.uuid
                         continue
@@ -231,7 +238,9 @@ class PanelFixes:
         change = self.change("host.fingerprint", item.target, params)
         hosts = {h.uuid: h for h in self.guarded(change, self.client.hosts)}
         change["details"] = {"previous": hosts[host_uuid].fingerprint if host_uuid in hosts else ""}
-        self.guarded(change, lambda: self.client.patch_host(host_uuid, {"fingerprint": "firefox"}))
+        wanted = {"fingerprint": fingerprint_of(host_uuid)}
+        change["details"]["written"] = wanted["fingerprint"]
+        self.guarded(change, lambda: self.client.patch_host(host_uuid, wanted))
         return change
 
     def reserve(self, item: Any) -> Change:

@@ -4,7 +4,8 @@ Padding fields must match on the server (the inbound's `extra` in the
 profile) and on every client, or the tunnel breaks. A client gets the host's
 `extra` when it is not empty, else the inbound's whole (the panel does not
 merge them): a host without its own `extra` follows the inbound. The key
-and the header are random per inbound, so the fleet shares no signature.
+and the header are random per inbound, and so is the range of the padding
+(K26): neither the fleet nor KERBEROS as a whole shares one signature.
 Rollback removes only the keys KERBEROS added.
 """
 
@@ -24,6 +25,9 @@ PADDING_KEYS = (
     "xPaddingPlacement",
     "xPaddingMethod",
 )
+# The range of `xPaddingBytes`, random per inbound (K26): before it was 100-1000 everywhere.
+PADDING_LOW = (64, 256)
+PADDING_HIGH = (768, 1536)
 # Header names that look like what browsers and frameworks send.
 HEADER_WORDS = ("Request", "Trace", "Session", "Client", "Cache", "Edge", "Origin", "Span")
 
@@ -33,7 +37,7 @@ def padding_fields(rng: random.Random) -> dict:
     key = "".join(rng.choice(letters) for _ in range(rng.randint(6, 10)))
     suffix = "".join(rng.choice(letters) for _ in range(4))
     return {
-        "xPaddingBytes": "100-1000",
+        "xPaddingBytes": f"{rng.randint(*PADDING_LOW)}-{rng.randint(*PADDING_HIGH)}",
         "xPaddingObfsMode": True,
         "xPaddingKey": key,
         "xPaddingHeader": f"X-{rng.choice(HEADER_WORDS)}-{suffix.capitalize()}",

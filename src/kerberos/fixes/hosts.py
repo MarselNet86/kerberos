@@ -9,6 +9,7 @@ when given, the subscription template, tags and visibility.
 from __future__ import annotations
 
 import copy
+import hashlib
 from typing import Any, Optional
 
 from kerberos.panel.model import Host
@@ -16,6 +17,7 @@ from kerberos.panel.model import Host
 # Fields of the answer that a new host does not take.
 NOT_COPIED = {"uuid", "viewPosition"}
 KEEP = object()
+FINGERPRINTS = ("chrome", "firefox")
 REMARK_LIMIT = 40  # 2.8 takes remarks up to 40 UTF-16 code units, 3.x up to 100 (§7.4)
 CHANGED = {
     "sni",
@@ -53,13 +55,20 @@ def copy_fields(
     fields["sni"] = domain
     fields["overrideSniFromAddress"] = False
     fields["keepSniBlank"] = False
-    fields["fingerprint"] = source.fingerprint or "firefox"
+    fields["fingerprint"] = source.fingerprint or fingerprint_of(source.uuid)
     fields["isDisabled"] = False
     if template_uuid is not KEEP:
         fields["xrayJsonTemplateUuid"] = template_uuid
     if hidden is not None:
         fields["isHidden"] = hidden
     return fields
+
+
+def fingerprint_of(key: str) -> str:
+    """The uTLS fingerprint a host gets when it has none (§10.5, K26): chrome or firefox,
+    the same for a host every time, so the hosts of KERBEROS do not all show one. Safari
+    and Edge are left out: a phone on Android with Safari's fingerprint stands out itself."""
+    return FINGERPRINTS[hashlib.sha256(key.encode("utf-8")).digest()[0] % len(FINGERPRINTS)]
 
 
 def _units(text: str) -> int:
@@ -98,7 +107,7 @@ def fresh_host(remark: str, address: str, port: int, domain: str, profile_uuid: 
         "address": address,
         "port": port,
         "sni": domain,
-        "fingerprint": "firefox",
+        "fingerprint": fingerprint_of(f"{profile_uuid}:{inbound_uuid}:{remark}"),
         "isDisabled": False,
         "isHidden": False,
         "overrideSniFromAddress": False,
