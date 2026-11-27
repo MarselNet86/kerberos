@@ -158,6 +158,68 @@ def dns_state(app: App, session: Session, item: PlanItem) -> None:
         item.selected = True
 
 
+def last_domains(app: App) -> dict[str, str]:
+    """node uuid -> the domain typed for it in the newest earlier run (K25): its own
+    domain did not go through, or went back, so the node is in the plan again."""
+    if app.env.state is None:
+        return {}
+    found: dict[str, str] = {}
+    for run in RunStore(app.env.state, app.env.clock).runs():
+        for change in run.get("changes") or []:
+            params = change.get("params") or {}
+            fix_id = str(change.get("fixId", ""))
+            node, domain = params.get("node"), params.get("domain")
+            if (fix_id.startswith("self_steal") or fix_id == "xui.reality") and node and domain:
+                found.setdefault(str(node), str(domain))
+    return found
+
+
+def domain_candidates(session: Session, item: PlanItem, last: dict) -> list[tuple[str, str]]:
+    """(name, where from) in the order of §6 S7: the last run, the node's address in the
+    panel, the addresses of its visible enabled hosts. Names only, never IP addresses."""
+    from kerberos.checks import is_ip
+
+    node = session.snapshot.node(item.node_uuid or "")
+    if node is None:
+        return []
+    found = []
+    if last.get(node.uuid):
+        found.append((last[node.uuid], t("plan.domain.from.last")))
+    found.append((node.address, t("plan.domain.from.node")))
+    for host in session.snapshot.node_hosts(node):
+        if not host.is_disabled and not host.is_hidden:
+            found.append((host.address, t("plan.domain.from.host", host=host.remark)))
+    return [(name.strip().lower().rstrip("."), where) for name, where in found
+            if name and not is_ip(name.strip())]  # fmt: skip
+
+
+def prefill_domains(app: App, session: Session, items: list[PlanItem]) -> None:
+    """K25: the domain of «Свой домен» the person need not type: one that already
+    resolves to the node (§6 S7). The panel's own domain never is one."""
+    location = session.location
+    panel_domain = ((location.panel_domain if location else "") or "").lower()
+    taken = {i.params.get("domain") for i in items if i.fix_id == "self_steal"}
+    sources: dict = session.data.setdefault("domain_from", {})
+    last = last_domains(app)
+    for item in items:
+        if item.fix_id != "self_steal" or item.blocked or item.params.get("domain"):
+            continue
+        before = dict(item.params)
+        for name, source in domain_candidates(session, item, last):
+            if name == panel_domain or name in taken or not DOMAIN_RE.match(name):
+                continue
+            item.params["domain"] = name
+            dns_state(app, session, item)
+            if item.params.get("dns") == "ok":
+                app.env.masker.register(name)
+                sources[item.node_uuid] = source
+                taken.add(name)
+                break
+            item.params.clear()
+            item.params.update(before)
+            item.selected = False
+
+
 def pair_ready(items: list[PlanItem], pair: PlanItem) -> bool:
     """A reserve pair runs only when both nodes move to their domains in this run."""
     wanted = {pair.node_uuid, pair.params["reserve"]}
@@ -305,6 +367,8 @@ def ask_domain(app: App, session: Session, item: PlanItem) -> None:
     value = app.interact(t("plan.title"), field, keys, handle, typing=True).strip().lower()
     if value:
         app.env.masker.register(value)
+        if value != item.params.get("domain"):
+            session.data.get("domain_from", {}).pop(item.node_uuid, None)
         item.params["domain"] = value
         dns_state(app, session, item)
 
@@ -532,6 +596,10 @@ def plan_details(app: App, session: Session, item: PlanItem) -> RenderableType:
     if item.blocked:
         lines.append(Text(t("plan.details.blocked", reason=note), style="risk.medium"))
     else:
+        source = session.data.get("domain_from", {}).get(item.node_uuid)
+        if item.fix_id == "self_steal" and source and item.params.get("domain"):
+            lines.append(Text(t("plan.domain.found", domain=app.mask(item.params["domain"]),
+                                where=app.mask(source)), style="muted"))  # fmt: skip
         if item.fix_id == "self_steal" and item.params.get("dns") == "wait":
             # The record to make, in full: the table column is too narrow for it.
             lines.append(Text(t("plan.domain.wait", record=app.mask(item.params["record"])),
@@ -726,6 +794,10 @@ def step_plan(app: App, session: Session) -> Any:
             session.data["findings"], data, session.data.get("admin"), panel_ips,
             session.data["rng"],
         )  # fmt: skip
+        prefill_domains(app, session, session.data["plan"])
+        # Old names leave by the timer unless the person turns it off (K25); 3x-ui
+        # gives KERBEROS no token for a timer (§7.6).
+        session.data.setdefault("auto_finalize", session.snapshot.kind != "3x-ui")
     items: list[PlanItem] = session.data["plan"]
     if not items:
         app.notice("info", t("plan.empty"), t("plan.title"))
