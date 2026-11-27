@@ -413,6 +413,21 @@ def public_ports(item: NodeData, data: CheckInput) -> list[str]:
     return sorted(ports, key=lambda p: int(p.split("/")[0]))
 
 
+@check("ssh.open", "scanning", "info", "ssh.panel_only", "fix", panels=REMNAWAVE)
+def ssh_open(data: CheckInput) -> list[Finding]:
+    """K28: SSH of the node answers the whole internet. Fine with a key, fail2ban and a port
+    of its own, so only «инфо»: the person may still close it to all but the panel server."""
+    result = []
+    for item in with_facts(data):
+        ssh = item.facts.get("ssh") or {}
+        ports = [p for p in ssh.get("ports") or [] if isinstance(p, int)]
+        if not ports:
+            continue
+        open_ = sorted(set(ports) - set(ssh.get("guarded") or []))
+        result.append(finding("ssh.open", node_target(item.node), not open_, {"ports": open_}))
+    return result
+
+
 @check("ports.public", "scanning", "medium", "ports.drop", "fix")
 def ports_public(data: CheckInput) -> list[Finding]:
     return [

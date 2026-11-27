@@ -77,6 +77,8 @@ def warning_of(item: PlanItem, kind: str = "remnawave") -> Optional[str]:
         return t("fix.key_only.warning")
     if item.fix_id == "ssh.port":
         return t("fix.ssh_port.warning", port=item.params.get("port"))
+    if item.fix_id == "ssh.panel_only":
+        return t("fix.ssh_panel.warning")
     if item.fix_id == "self_steal":
         # 3x-ui changes only target and serverNames of its Reality inbounds (§7.6).
         return t("fix.xui_steal.warning") if kind == "3x-ui" else t("fix.self_steal.warning")
@@ -1322,6 +1324,17 @@ def save_lines(app: App, session: Session, run: dict) -> list[Text]:
         command = f"ssh -p {change['details'].get('newPort')} root@{app.mask(node.address)}"
         lines.append(Text(t("s9.save.ssh", node=app.mask(node.name), command=command),
                           style="bold"))  # fmt: skip
+    for change in run["changes"]:
+        # K28: the way in now goes through the panel server.
+        if change["fixId"] != "ssh.panel_only" or change["state"] != "confirmed":
+            continue
+        node = session.snapshot.node(change["target"].partition(":")[2])
+        if node is None or rollback_failed(change):
+            continue
+        panel = change["details"].get("panelIp") or change["params"].get("panelIp", "")
+        command = f"ssh -J root@{app.mask(panel)} root@{app.mask(node.address)}"
+        lines.append(Text(t("s9.save.ssh_panel", node=app.mask(node.name), command=command),
+                          style="bold"))  # fmt: skip
     lines += panel_links(app, run)
     renewed = [app.mask(node_name(session, c["target"], c["params"])) for c in run["changes"]
                if c["fixId"] == "hostkeys.regenerate" and applied(c)]  # fmt: skip
@@ -1484,7 +1497,8 @@ def step_done(app: App, session: Session) -> Any:
             admin = app.env.state is not None and app.env.state.admin_key.exists()
             # `kerberos ssh` works only with the administrator key on this server (§8.5).
             note = t("s9.save.kerberos_ssh") if admin and any(
-                c["fixId"] == "ssh.port" for c in run["changes"]) else ""  # fmt: skip
+                c["fixId"] in ("ssh.port", "ssh.panel_only") for c in run["changes"]
+            ) else ""  # fmt: skip
             top.append(framed(t("s9.block.save"), saves, "accent", note, compact))
         listing.blocks = done_blocks(app, session, run, after)
         bottom = [framed(t("s9.block.next"), next_lines(app, run, path), "muted",

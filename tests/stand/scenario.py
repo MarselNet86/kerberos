@@ -369,6 +369,16 @@ def main() -> int:
         ufw_variant(before)
 
     if before["ssh"]["adminKeys"]:
+        # K28: SSH only from the panel. The scenario itself runs over SSH from elsewhere:
+        # that it goes on proves the open session survives the rule.
+        cycle("ssh.panel_only", {"panelIp": PANEL},
+              lambda f: f["ssh"]["guarded"] == f["ssh"]["ports"]
+              and "inet kerberos_ssh" in f["nftTables"],
+              lambda f: f["ssh"]["guarded"] == before["ssh"]["guarded"]
+              and "inet kerberos_ssh" not in f["nftTables"], confirm=True,
+              describe=lambda f: json.dumps([f["ssh"]["ports"], f["ssh"]["guarded"]]))  # fmt: skip
+        report("sshd answers on loopback after ssh.panel_only", all(
+            ssh_answers(p) for p in facts()["ssh"]["ports"]))  # fmt: skip
         cycle("ssh.key_only", {},
               lambda f: not f["ssh"]["passwordAuthentication"],
               lambda f: f["ssh"]["passwordAuthentication"]

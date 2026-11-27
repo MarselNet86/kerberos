@@ -31,7 +31,9 @@ from kerberos.panel.discover import XUI_BIN, XUI_DB
 LOGIN, PASSWORD = "portaladmin7", "portal-pass-123"
 # `a` twice clears the marks; then the group «Вход в панель» (K23): after the access to
 # the servers, the new SSH port and the holes for scanners, on both panels.
-ONLY_LAST_ROW = ["a", "a", "home"] + ["down"] * 3
+ONLY_LAST_ROW = ["a", "a", "home"] + ["down"] * 4  # the group «Вход в панель» (K28: +1 group)
+# 3x-ui has no «SSH только с сервера панели» (K28: the panel server is the node itself).
+XUI_LAST_ROW = ["a", "a", "home"] + ["down"] * 3
 CREDS = ["p"] + typed(LOGIN) + ["enter"] + typed(PASSWORD) + ["enter"] + typed(PASSWORD)
 CREDS += ["enter"]
 APPLY = ["enter", "enter"]  # S7 → consent, accept
@@ -258,7 +260,7 @@ XUI_TO_PLAN += ["enter", "enter", "enter"]  # S2, S4 summaries, S6 → S7
 
 
 def xui(extra, height=44, host=None):
-    keys = XUI_TO_PLAN + ONLY_LAST_ROW + ["space"] + APPLY + list(extra)
+    keys = XUI_TO_PLAN + XUI_LAST_ROW + ["space"] + APPLY + list(extra)
     app, term = make_app(keys, panel_kind=None, height=height, host=host)
     return app, term
 
@@ -500,7 +502,7 @@ def test_whole_rollback_on_3x_ui_after_a_panel_move_and_a_self_steal():
     from kerberos.demo.xui import XUI_DOMAIN
 
     keys = XUI_TO_PLAN + ["a", "a", "end", "d"] + list(XUI_DOMAIN) + ["enter"]
-    keys += ONLY_LAST_ROW[2:] + ["space"] + APPLY + ["enter", "enter"]
+    keys += XUI_LAST_ROW[2:] + ["space"] + APPLY + ["enter", "enter"]
     app, _term = make_app(keys, panel_kind=None, height=44)
     assert app.run("fix") == EXIT_OK
     run, _change = portal_change(app, "xui.panel_hide")

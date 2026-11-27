@@ -277,3 +277,98 @@ def test_backup_directory_is_private(node):
 
 def test_recorder_is_reused_for_command_order(node, recorder):
     assert isinstance(recorder, Recorder)
+
+
+# -- SSH only from the panel server (tech.md §9.2, §10.3, K28) ----------------------------
+# The rule lets SSH in only from the address this very session of KERBEROS comes from; open
+# sessions stay. It is an access change: a timer puts it back unless a new connection of
+# KERBEROS confirms it.
+
+PANEL = "198.51.100.5"
+SSHD_22 = 'tcp LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=7,fd=3))\n'
+SSHD_BOTH = SSHD_22 + 'tcp LISTEN 0 128 0.0.0.0:24622 0.0.0.0:* users:(("sshd",pid=7,fd=4))\n'
+IP_ADDR = json.dumps([{"ifname": "eth0", "addr_info": [
+    {"family": "inet", "local": "203.0.113.10", "scope": "global", "prefixlen": 24}]}])  # fmt: skip
+
+
+def listening(recorder, text=SSHD_22):
+    recorder.on(["ss", "-Hlntup"], agent.Result(0, text))
+    recorder.on(["ip", "-j", "addr", "show"], agent.Result(0, IP_ADDR))
+
+
+def test_ssh_answers_only_the_panel_and_open_sessions_stay(node, recorder):
+    listening(recorder, SSHD_BOTH)
+    change, code, answer = apply(node, "ssh.panel_only", {"panelIp": PANEL})
+    assert code == 0, answer
+    assert answer["state"] == "pending_confirm", "an access change waits for a new login"
+    nft = read(node, "/etc/kerberos/ssh.nft")
+    assert nft.startswith("table inet kerberos_ssh\nflush table inet kerberos_ssh\n")
+    rules = [line.strip() for line in nft.splitlines()]
+    assert rules.index("tcp dport { 22, 24622 } ct state established,related accept") < rules.index(
+        "tcp dport { 22, 24622 } counter drop"
+    )
+    assert 'iifname "lo" tcp dport { 22, 24622 } accept' in rules
+    assert f"tcp dport {{ 22, 24622 }} ip saddr {PANEL} counter accept" in rules
+    assert answer["details"] == {"ports": [22, 24622], "panelIp": PANEL}
+    assert any(c[:1] == ["systemd-run"] and "kerberos-undo-" + change in " ".join(c)
+               for c in recorder.calls), "the timer puts it back without a confirm"  # fmt: skip
+    code, answer = call(node, ["confirm", change])
+    assert code == 0 and answer["state"] == "confirmed"
+    code, answer = call(node, ["rollback", change])
+    assert code == 0 and answer["state"] == "rolled_back"
+    assert read(node, "/etc/kerberos/ssh.nft") is None
+    assert ["systemctl", "disable", "--now", "kerberos-ssh.service"] in recorder.calls
+
+
+def test_a_session_from_another_address_is_refused(node, recorder):
+    listening(recorder)
+    node.environ["SSH_CONNECTION"] = "192.0.2.77 41022 203.0.113.10 22"
+    _change, code, answer = apply(node, "ssh.panel_only", {"panelIp": PANEL})
+    assert code == 1 and answer["error"]["code"] == "panel_not_peer"
+    assert read(node, "/etc/kerberos/ssh.nft") is None
+
+
+def test_the_panel_server_on_this_very_node_is_refused(node, recorder):
+    listening(recorder)
+    node.environ["SSH_CONNECTION"] = "203.0.113.10 41022 203.0.113.10 22"
+    _change, code, answer = apply(node, "ssh.panel_only", {"panelIp": "203.0.113.10"})
+    assert code == 1 and answer["error"]["code"] == "panel_local"
+    node.environ["SSH_CONNECTION"] = "127.0.0.1 41022 127.0.0.1 22"
+    _change, code, answer = apply(node, "ssh.panel_only", {"panelIp": "127.0.0.1"})
+    assert code == 1 and answer["error"]["code"] == "panel_local", "3x-ui: SSH only from itself"
+
+
+def test_no_key_of_the_person_no_rule(node, recorder):
+    listening(recorder)
+    write(node, "/root/.ssh/authorized_keys", KERBEROS + "\n", 0o600)
+    _change, code, answer = apply(node, "ssh.panel_only", {"panelIp": PANEL})
+    assert code == 1 and answer["error"]["code"] == "no_admin_key"
+
+
+def test_applied_twice_with_one_change_id_is_a_noop(node, recorder):
+    listening(recorder)
+    change, code, _answer = apply(node, "ssh.panel_only", {"panelIp": PANEL})
+    assert code == 0
+    _change, code, answer = apply(node, "ssh.panel_only", {"panelIp": PANEL}, change)
+    assert code == 0 and answer["state"] == "noop"
+
+
+def nft_rule(port: int, verdict: str, saddr: str = "") -> dict:
+    expr = [{"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}},
+                       "right": port}}]  # fmt: skip
+    if saddr:
+        expr.insert(0, {"match": {"op": "==", "left": {"payload": {"protocol": "ip",
+                                                                   "field": "saddr"}},
+                                  "right": saddr}})  # fmt: skip
+    expr.append({verdict: None})
+    return {"rule": {"family": "inet", "table": "kerberos_ssh", "chain": "input", "expr": expr}}
+
+
+def test_facts_say_which_ports_of_ssh_are_guarded():
+    ruleset = agent.Ruleset(json.dumps({"nftables": [
+        {"table": {"family": "inet", "name": "kerberos_ssh"}},
+        {"chain": {"family": "inet", "table": "kerberos_ssh", "name": "input", "hook": "input"}},
+        nft_rule(22, "accept", PANEL),
+        nft_rule(22, "drop"),
+    ]}))  # fmt: skip
+    assert 22 in ruleset.dropped("tcp") and 24622 not in ruleset.dropped("tcp")

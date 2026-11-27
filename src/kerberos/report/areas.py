@@ -32,6 +32,7 @@ FIX_AREA = {
     "fail2ban.sshd": "access",
     "hostkeys.regenerate": "access",
     "ssh.port": "access",
+    "ssh.panel_only": "access",
     "mptcp.guard": "scanners",
     "node_api.panel_only": "scanners",
     "ports.drop": "scanners",
@@ -49,8 +50,10 @@ FIX_AREA = {
 
 # Rows of the block «KERBEROS сделает сам» in S7, in this order. Own domain is not
 # among them: it has a block of its own, a row a node, where the domain is typed.
-PLAN_GROUPS = ("access", "ssh_port", "scanners", "panel_login", "cdn", "subscription", "watch")
-OWN_GROUP = {"ssh.port": "ssh_port", "panel.portal": "panel_login", "xui.panel_hide": "panel_login"}
+PLAN_GROUPS = ("access", "ssh_port", "ssh_panel", "scanners", "panel_login", "cdn",
+               "subscription", "watch")  # fmt: skip
+OWN_GROUP = {"ssh.port": "ssh_port", "ssh.panel_only": "ssh_panel", "panel.portal": "panel_login",
+             "xui.panel_hide": "panel_login"}  # fmt: skip
 
 
 def area_of(fix_id: Optional[str]) -> str:

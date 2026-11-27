@@ -626,6 +626,12 @@ TEXT: dict[str, str] = {
     "check.reserve.same_asn.title": "Основа и резерв у одного хостера (AS{asn})",
     "check.reserve.same_asn.threat": "Блокировка хостера снимет и основу, и резерв",
     "check.reserve.same_asn.how": "держите резерв у другого хостера",
+    "check.ssh.open.title": "SSH ноды открыт всему интернету",
+    "check.ssh.open.threat": (
+        "Сканеры находят SSH, по ключу сервера связывают ваши ноды и круглые сутки подбирают пароли"
+    ),
+    "check.ssh.open.how": "оставьте SSH только для сервера панели: строка в плане, по выбору",
+    "check.ssh.open.short": "SSH открыт всему интернету",
     "check.node.blocked.title": "Похоже, ноду заблокировали",
     "check.node.blocked.threat": (
         "На основе нет пользователей, а резерв работает, или соединения обрываются "
@@ -689,6 +695,7 @@ TEXT: dict[str, str] = {
     "fix.hostkeys.regenerate.label": "Новые ключи сервера",
     "fix.ssh.key_only.label": "Вход только по ключу",
     "fix.ssh.port.label": "Перенести SSH на порт {port}",
+    "fix.ssh.panel_only.label": "Оставить SSH только для сервера панели",
     "fix.panel.portal.label": "Портал входа перед панелью",
     "fix.xui.panel_hide.label": "Спрятать панель 3x-ui: новый порт и секретный путь",
     "fix.self_steal.label": "Свой домен {domain}",
@@ -1042,10 +1049,19 @@ TEXT: dict[str, str] = {
     "error.reserve_chain": "нода не может быть резервом и основой одновременно",
     "plan.reserve.is_reserve": "{node} уже резерв для {main}: у резерва не бывает своего резерва",
     "plan.blocked.panel_peer": "панель подключается к ноде не с того адреса, что KERBEROS",
+    "plan.blocked.panel_local": "сервер панели — эта же нода: SSH остался бы только для неё самой",
+    "error.panel_local": "сервер панели — эта же нода: SSH остался бы только для неё самой",
+    "fix.ssh_panel.warning": (
+        "SSH на нодах будет пускать только с сервера панели. Входите на ноды через него: "
+        "ssh -J root@<сервер панели> root@<нода>, а с самого сервера панели — kerberos ssh "
+        "<нода>; консоль хостера тоже работает. Уже открытые сессии не оборвутся."
+    ),
+    "s9.save.ssh_panel": "{node}: только через сервер панели — {command}",
     # K23: blocks on S6, the plan, consent and S9; the same areas on all four
     "area.domain": "Свой домен",
     "area.access": "Вход на серверы",
     "area.ssh_port": "Новый порт SSH",
+    "area.ssh_panel": "SSH через панель",
     "area.scanners": "Дыры для сканеров",
     "area.panel_login": "Вход в панель",
     "area.cdn": "Туннель за CDN",
@@ -1059,6 +1075,7 @@ TEXT: dict[str, str] = {
     "fix.fail2ban.sshd.short": "защита от перебора паролей",
     "fix.hostkeys.regenerate.short": "новые ключи сервера",
     "fix.ssh.port.short": "новый порт SSH",
+    "fix.ssh.panel_only.short": "SSH только с сервера панели",
     "fix.mptcp.guard.short": "защита от уязвимости MPTCP",
     "fix.node_api.panel_only.short": "API ноды только для панели",
     "fix.ports.drop.short": "закрытие лишних портов",
@@ -1122,6 +1139,9 @@ TEXT: dict[str, str] = {
     "plan.partial": "{n} из {total}",
     "plan.group.ssh_port.desc": (
         "случайный порт вместо 22; старый закроется только после входа на новый"
+    ),
+    "plan.group.ssh_panel.desc": (
+        "на ноды входить через сервер панели; сканеры SSH ноды больше не видят"
     ),
     "plan.domain.enter": "d: ввести домен",
     "plan.domain.from.last": "домен из прошлого запуска",

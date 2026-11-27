@@ -130,6 +130,7 @@
   },
   "ssh": {
     "adminKeys": 0,
+    "guarded": [],
     "kbdInteractive": false,
     "passwordAuthentication": true,
     "permitRootLogin": "yes",

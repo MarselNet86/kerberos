@@ -60,8 +60,12 @@ def test_defaults_and_params():
     data, items = plan({"mode": "create", "keys": []})
     nl1 = {i.fix_id: i for i in by_node(data, items)["nl-1"]}
     assert all(
-        i.selected for k, i in nl1.items() if k not in ("ssh.port", "self_steal", "watch.install")
+        i.selected
+        for k, i in nl1.items()
+        if k not in ("ssh.port", "ssh.panel_only", "self_steal", "watch.install")
     )
+    assert not nl1["ssh.panel_only"].selected, "SSH only from the panel is the person's (K28)"
+    assert nl1["ssh.panel_only"].params == {"panelIp": PANEL_IP}
     assert not nl1["watch.install"].selected, "the watch is installed by choice (§10.2)"
     assert nl1["self_steal"].params["domain"] is None and not nl1["self_steal"].selected
     assert nl1["ports.drop"].params == {"ports": ["8080/tcp"]}

@@ -190,7 +190,7 @@ def test_s9_snapshot_and_s7_rows(monkeypatch):
     s7 = next(f for f in term.frames if t("plan.title") in f.splitlines()[0])
     assert t("area.scanners") in s7 and t("fix.mptcp.guard.short") in s7
     # K23: the four own domains are a block of their own, waiting for a domain. Not marked
-    # in the groups: ssh.port (4 nodes), host.fingerprint (low), watch.install (by choice,
-    # 2 nodes), cdn.edge_only waiting for its nets.
-    assert t("plan.block.auto.note", n=ALL_ITEMS, total=ALL_ITEMS + 8) in s7
-    assert len(plan_rows()) == ALL_ITEMS + 12
+    # in the groups: ssh.port and ssh.panel_only (4 nodes each, K28), host.fingerprint (low),
+    # watch.install (by choice, 2 nodes), cdn.edge_only waiting for its nets.
+    assert t("plan.block.auto.note", n=ALL_ITEMS, total=ALL_ITEMS + 12) in s7
+    assert len(plan_rows()) == ALL_ITEMS + 16

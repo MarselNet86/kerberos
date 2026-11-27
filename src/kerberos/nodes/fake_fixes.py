@@ -15,7 +15,7 @@ from kerberos.nodes.fake import FakeNode
 from kerberos.nodes.keys import PublicKey, demo_blob, fingerprint
 from kerberos.nodes.transport import NodeAgentError, TransportError
 
-ACCESS = {"ssh.key_only", "ssh.port", "hostkeys.regenerate"}
+ACCESS = {"ssh.key_only", "ssh.port", "hostkeys.regenerate", "ssh.panel_only"}
 
 
 def _table(facts: dict, name: str, add: bool) -> None:
@@ -95,6 +95,24 @@ def apply_ports(node: FakeNode, params: dict, change_id: str) -> tuple[dict, Cal
             _table(facts, "inet kerberos_ports", False)
 
     return {"ports": sorted(wanted)}, undo
+
+
+def apply_ssh_panel(node: FakeNode, params: dict, change_id: str) -> tuple[dict, Callable]:
+    """K28: SSH only from the panel server, as the agent's table does."""
+    facts = node.state["facts"]
+    if params["panelIp"] in facts.get("ipv4", []) + facts.get("ipv6", []):
+        raise NodeAgentError("panel_local", "the panel server is this node")
+    if not facts["ssh"].get("adminKeys"):
+        raise NodeAgentError("no_admin_key", "no key of the administrator to come in with")
+    saved = copy.deepcopy(facts["ssh"])
+    facts["ssh"]["guarded"] = sorted(facts["ssh"]["ports"])
+    _table(facts, "inet kerberos_ssh", True)
+
+    def undo() -> None:
+        facts["ssh"] = saved
+        _table(facts, "inet kerberos_ssh", False)
+
+    return {"ports": sorted(facts["ssh"]["ports"]), "panelIp": params["panelIp"]}, undo
 
 
 def apply_hostkeys(node: FakeNode, params: dict, change_id: str) -> tuple[dict, Callable]:
@@ -293,6 +311,7 @@ MODEL: dict = {
     "ssh.key_only": apply_key_only,
     "access.admin_keys": apply_admin_keys,
     "ssh.port": apply_ssh_port,
+    "ssh.panel_only": apply_ssh_panel,
     "self_steal.site": apply_site,
     "node.letsencrypt_mount": apply_mount,
     "cdn.edge_only": apply_edge_only,
