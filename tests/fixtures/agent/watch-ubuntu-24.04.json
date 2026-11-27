@@ -5,17 +5,24 @@
   ],
   "protocol": 1,
   "v4": {
-    "clientIps": 3,
-    "connections": 3,
-    "cut": 2,
+    "clientIps": 4,
+    "connections": 4,
+    "cut": 3,
     "cutNets": [
       {
-        "count": 1,
+        "count": 2,
         "net": "198.51.0.0/16"
       },
       {
         "count": 1,
         "net": "203.0.0.0/16"
+      }
+    ],
+    "stalled": 1,
+    "stalledNets": [
+      {
+        "count": 1,
+        "net": "198.51.0.0/16"
       }
     ]
   },
@@ -28,7 +35,9 @@
         "count": 1,
         "net": "2001:db8::/32"
       }
-    ]
+    ],
+    "stalled": 0,
+    "stalledNets": []
   },
   "xray": {
     "accepted5m": 3,

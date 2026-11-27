@@ -52,3 +52,32 @@ def test_a_real_sample_with_few_cut_connections_passes(data):
     node = lone_node(data)
     node.watch = watch(40, 1)
     assert finding_of(data, node)["ok"] is True
+
+
+# -- K27: frozen after the first 16 KB ----------------------------------------------------
+def stalled_watch(connections: int, stalled: int) -> dict:
+    found = watch(connections, 0)
+    found["v4"].update(stalled=stalled, stalledNets=[])
+    return found
+
+
+def test_many_connections_frozen_after_16_kb_are_a_block(data):
+    node = lone_node(data)
+    node.watch = stalled_watch(40, 6)
+    found = finding_of(data, node)
+    assert found["ok"] is False and found["evidence"]["stallShare"] == 0.15
+
+
+def test_few_frozen_connections_or_a_small_sample_are_not(data):
+    node = lone_node(data)
+    node.watch = stalled_watch(40, 2)
+    assert finding_of(data, node)["ok"] is True
+    node.watch = stalled_watch(10, 10)
+    assert finding_of(data, node) is None
+
+
+def test_an_agent_before_0_11_sends_no_stalled_count(data):
+    node = lone_node(data)
+    node.watch = watch(40, 1)  # no `stalled` at all
+    found = finding_of(data, node)
+    assert found["ok"] is True and found["evidence"]["stallShare"] == 0.0

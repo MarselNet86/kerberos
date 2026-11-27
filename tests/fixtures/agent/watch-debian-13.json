@@ -8,13 +8,17 @@
     "clientIps": 0,
     "connections": 0,
     "cut": 0,
-    "cutNets": []
+    "cutNets": [],
+    "stalled": 0,
+    "stalledNets": []
   },
   "v6": {
     "clientIps": 0,
     "connections": 0,
     "cut": 0,
-    "cutNets": []
+    "cutNets": [],
+    "stalled": 0,
+    "stalledNets": []
   },
   "xray": {
     "accepted5m": null,

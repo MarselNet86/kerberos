@@ -180,4 +180,4 @@ def test_watch_script_writes_one_line_of_counts(tmp_path):
     line = log.read_text()
     assert line.count("\n") == 1
     # no ss: no port of Xray is known, and the line says so (K18)
-    assert " port=- conn=0 ips=0 cut=0 nets=- users5m=None req5m=None" in line
+    assert " port=- conn=0 ips=0 cut=0 nets=- stall=0 users5m=None req5m=None" in line
