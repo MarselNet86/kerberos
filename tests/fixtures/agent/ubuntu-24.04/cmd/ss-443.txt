@@ -6,3 +6,5 @@
 	 cubic wscale:7,7 rto:204 rtt:3.2/1.6 bytes_received:900 lastsnd:8000 lastrcv:9000 lastack:8000
 0      0      203.0.113.10:443       203.0.113.99:51237
 	 cubic wscale:7,7 rto:204 rtt:3.2/1.6 lastsnd:4000 lastrcv:4000
+0      0      203.0.113.10:443       198.51.100.9:51238
+	 cubic wscale:7,7 rto:1632 rtt:3.2/1.6 mss:1448 bytes_sent:30000 bytes_retrans:4344 bytes_acked:16385 bytes_received:517 segs_out:24 segs_in:6 unacked:9 retrans:1/3 lastsnd:200 lastrcv:9000 lastack:6400
