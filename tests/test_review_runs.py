@@ -33,7 +33,8 @@ def test_failed_timer_is_not_reported_and_no_token_is_made():
     assert any(c[:1] == ("systemd-run",) for c in app.env.host.calls)  # the demo host has none
     assert run["finalizeTimer"] is None
     assert not (store_of(app).path(run["runId"]) / "finalize.token").exists()
-    assert not any(path.startswith("/tokens") for _m, path, _b in panel.log)
+    made = [method for method, path, _b in panel.log if path.startswith("/tokens")]
+    assert made == ["POST"], "only the token S2 made (K30): the timer makes none of its own"
 
 
 def test_timer_of_a_rolled_back_run_finds_nothing_to_do():

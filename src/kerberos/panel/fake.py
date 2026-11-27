@@ -6,7 +6,8 @@ headers, unknown fields, wrong types and unknown uuids fail loudly, as a
 strict panel would. Failures can be injected per endpoint.
 
 It behaves like the real backend where KERBEROS once went wrong (§7.3, §7.4):
-an admin login token is refused without the browser header, API tokens have
+an admin login token is refused without the browser header, every failed
+login is 403, only that token may make or delete API tokens, API tokens have
 scopes per section, 3.x answers 204 without a body to bulk calls and deletes,
 2.8 enables a host whose PATCH lacks `isDisabled`, remarks, tags and template
 names have limits, and a profile PATCH may store a normalized config.
@@ -24,7 +25,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional, Union
 from urllib.parse import urlsplit
 
-from kerberos.panel.client import FORWARD_HEADERS, NoResponse, Unreachable
+from kerberos.panel.client import CLIENT_TYPE_HEADER, FORWARD_HEADERS, NoResponse, Unreachable
 
 COMMON_HOST_FIELDS = {
     "remark",
@@ -53,7 +54,6 @@ COMMON_HOST_FIELDS = {
     "excludedInternalSquads",
 }
 SHAPE_FIELDS = {"tags": {"tags", "xhttpExtraParams"}, "tag": {"tag", "xHttpExtraParams"}}
-CLIENT_TYPE_HEADER = "x-remnawave-client-type"  # the panel's own web UI sends "browser"
 ADMIN_ONLY_FROM_BROWSER = "For API requests you must create own API-token in the admin dashboard."
 TEMPLATE_NAME = re.compile(r"[A-Za-z0-9_\s-]{2,255}")
 PROFILE_NAME = re.compile(r"[A-Za-z0-9_\s-]{2,30}")  # 2.8.1 and 3.4.11: 2 to 30 characters
@@ -70,6 +70,14 @@ SECTIONS = {
 }
 # Scopes of single endpoints, `<section>:<slug>` (scope slugs of the 2.8.1 and 3.4.11 contract).
 ENDPOINT_SCOPES = {("PATCH", "/nodes"): "nodes:update"}
+# Every failed login, whatever went wrong (2.8.1 and 3.4.11: ERRORS.FORBIDDEN).
+LOGIN_FAILED = {"message": "Forbidden", "errorCode": "A068"}
+BAD_SCOPE = {"message": "One or more provided API token scopes are invalid", "errorCode": "A229"}
+TOKEN_NOT_FOUND = {"message": "Requested token not found", "errorCode": "A007"}
+# Scopes a token may get: the wildcard, a section, its read or write, an endpoint of it.
+VALID_SCOPES = {"*", *ENDPOINT_SCOPES.values()} | {
+    f"{section}:{kind}" for section in SECTIONS.values() for kind in ("*", "read", "write")
+}
 
 
 class ContractError(Exception):
@@ -108,6 +116,7 @@ class FakePanel:
         password_enabled: bool = True,
         credentials: tuple[str, str] = ("admin", "admin-password"),
         accept_any_token: bool = False,
+        accept_any_login: bool = False,
         normalize_profile: Optional[Callable[[dict], dict]] = None,
     ) -> None:
         self.shape = shape
@@ -116,9 +125,12 @@ class FakePanel:
         self.password_enabled = password_enabled
         self.credentials = credentials
         self.accept_any_token = accept_any_token  # the demo: any token is a full-access one
+        self.accept_any_login = accept_any_login  # the demo: any name and password sign in
         self.normalize_profile = normalize_profile
         self.sessions: set[str] = set()  # admin login tokens: only the web UI may use them
         self.api_tokens: dict[str, list[str]] = {}  # token -> scopes
+        self.made_tokens: dict[str, dict] = {}  # uuid -> {token, name, expiresInDays, scopes}
+        self.logins: list[str] = []  # names of every login try: the panel's notifications
         self.nodes: list[dict] = []
         self.profiles: list[dict] = []
         self.hosts: list[dict] = []
@@ -142,10 +154,15 @@ class FakePanel:
 
     @property
     def mutations(self) -> list[tuple[str, str, Any]]:
-        """Requests that change panel state (login does not)."""
-        return [
-            entry for entry in self.log if entry[0] != "GET" and entry[1] not in ("/auth/login",)
-        ]
+        """Requests that change panel settings. Login does not, and neither does the API
+        token KERBEROS makes itself: access, as the agent key on a node (§2, K30)."""
+        return [entry for entry in self.log if entry[0] != "GET" and entry[1] != "/auth/login"
+                and not entry[1].startswith("/tokens")]  # fmt: skip
+
+    def made_token(self, uuid: str, token: str, name: str, days: int, scopes: list) -> None:
+        self.api_tokens[token] = list(scopes)
+        self.made_tokens[uuid] = {"token": token, "name": name, "expiresInDays": days,
+                                  "scopes": list(scopes)}  # fmt: skip
 
     def host(self, uuid: str) -> dict:
         for item in self.hosts:
@@ -259,14 +276,16 @@ class FakePanel:
             }
         if method == "POST" and path == "/auth/login":
             body = self._body(data, {"username": str, "password": str})
-            if not self.password_enabled:
-                return 403, {"message": "Password login is disabled"}
+            self.logins.append(body["username"])
             good = (body["username"], body["password"]) == self.credentials
-            if not (good or (self.accept_any_login and body["username"] and body["password"])):
-                return 401, {"message": "Invalid credentials"}
+            if not self.password_enabled or not (good or (
+                    self.accept_any_login and body["username"] and body["password"])):  # fmt: skip
+                return 403, dict(LOGIN_FAILED)  # disabled, no such admin or a wrong password
             token = "jwt-" + secrets.token_hex(16)
             self.sessions.add(token)
             return 200, {"accessToken": token}
+        if path == "/tokens" or path.startswith("/tokens/"):
+            return self._tokens(method, path, data)
         if method == "GET" and path == "/nodes":
             return 200, copy.deepcopy(self.nodes)
         if method == "GET" and path == "/config-profiles":
@@ -384,6 +403,40 @@ class FakePanel:
                 body["customResponseHeaders"]
             )
             return 200, copy.deepcopy(self.sub_settings)
+        return 404, {"message": f"no route {method} {path}"}
+
+    def _tokens(self, method: str, path: str, data: Any) -> tuple[int, Any]:
+        """API tokens as 2.8.1 and 3.4.11 make and delete them; `_refusal` already let only
+        the admin login token with the browser header through (K30)."""
+        if method == "POST" and path == "/tokens":
+            if not isinstance(data, dict) or set(data) - {"name", "expiresInDays", "scopes"}:
+                raise ContractError("body must be {name, expiresInDays, scopes}")
+            name, days = data.get("name"), data.get("expiresInDays")
+            if not isinstance(name, str) or not 2 <= len(name) <= 30:
+                raise ContractError("name must be 2 to 30 characters")
+            if isinstance(days, bool) or not isinstance(days, (int, float)) or days < 1:
+                raise ContractError("expiresInDays must be a number of at least 1")
+            scopes = data.get("scopes", ["*"])
+            if not isinstance(scopes, list) or not all(isinstance(x, str) for x in scopes):
+                raise ContractError("scopes must be a list of strings")
+            if any(scope not in VALID_SCOPES for scope in scopes):
+                return 400, dict(BAD_SCOPE)
+            uuid, token = str(uuidlib.uuid4()), "rw-" + secrets.token_hex(24)
+            self.made_token(uuid, token, name, int(days), scopes)
+            stamp = "2026-11-27T12:00:00.000Z"
+            return 201, {"uuid": uuid, "name": name, "expireAt": stamp, "scopes": list(scopes),
+                         "createdAt": stamp, "updatedAt": stamp, "token": token}  # fmt: skip
+        if method == "DELETE" and path.count("/") == 2:
+            ref = path.rsplit("/", 1)[1]
+            made = self.made_tokens.pop(ref, None)
+            if made is None:
+                return 404, dict(TOKEN_NOT_FOUND)
+            self.api_tokens.pop(made["token"], None)
+            return (204, None) if self.major >= 3 else (200, True)
+        if method == "GET" and path == "/tokens":
+            listing = [{"uuid": u, "name": m["name"], "scopes": m["scopes"]}
+                       for u, m in self.made_tokens.items()]  # fmt: skip
+            return 200, {"apiKeys": listing}
         return 404, {"message": f"no route {method} {path}"}
 
     def _taken_tags(self, config: dict, own: Optional[str]) -> list:

@@ -7,7 +7,7 @@ source showed: the fake panel used to accept what the real one refuses.
 import re
 import string
 
-from helpers import TOKEN, make_app, seen
+from helpers import TOKEN, make_app, seen, token_keys
 from hypothesis import given
 from hypothesis import strategies as st
 from test_self_steal_flow import (
@@ -336,7 +336,7 @@ def test_a_read_only_token_fails_panel_fixes_with_a_reason():
     import copy
 
     before = copy.deepcopy((panel.hosts, panel.templates, panel.sub_settings, panel.profiles))
-    _app, term, code = run_fix(APPLY, panel, nodes)
+    _app, term, code = run_fix(APPLY, panel, nodes, keys_before=token_keys())  # pasted (K30)
     assert code == EXIT_PARTIAL, "refused writes leave nothing to roll back: not exit 5"
     assert seen(term, t("error.forbidden"))
     assert (panel.hosts, panel.templates, panel.sub_settings, panel.profiles) == before
@@ -346,22 +346,20 @@ def test_a_token_refused_a_change_is_forgotten_and_the_next_run_asks():
     panel, nodes = fleet()
     panel.accept_any_token = False
     panel.add_api_token(TOKEN, scopes=tuple(SCOPES_CHECK))
-    app, _term, _code = run_fix(APPLY, panel, nodes)
+    app, _term, _code = run_fix(APPLY, panel, nodes, keys_before=token_keys())  # pasted (K30)
     assert app.env.state.read_panel_token() is None
     panel.add_api_token("rw-full-token")
-    keys = list("rw-full-token") + ["enter", "esc", "esc", "esc"]
+    keys = token_keys("rw-full-token") + ["esc", "esc", "esc"]
     app, term = make_app(keys, panel=panel, nodes=list(nodes.values()), state=app.env.state)
     app.run("fix")
-    assert seen(term, t("panel.token_hint"))
+    assert seen(term, t("panel.admin.hint")) and seen(term, t("panel.token_hint"))
     assert app.env.state.read_panel_token() == "rw-full-token"
 
 
 # -- review of K14: the token of a check, odd input, retries, the timer, half-landed writes ---
 def test_a_token_given_for_the_check_is_asked_about_before_changes():
-    from helpers import login_keys
-
     panel = build_panel()
-    app, _term = make_app(login_keys() + ["esc", "esc", "esc"], panel=panel)
+    app, _term = make_app(token_keys() + ["esc", "esc", "esc"], panel=panel)  # pasted (K30)
     app.run("check")
     state = app.env.state
     assert not state.panel_token_can_write()
@@ -371,7 +369,7 @@ def test_a_token_given_for_the_check_is_asked_about_before_changes():
     assert seen(term, t("panel.token.readonly"))
     assert any(t("panel.ok", nodes=6, hosts=10) in f for f in term.frames)
     # Or another one, typed under the rights for changes: it is kept as one for changes.
-    keys = ["down", "enter"] + list("rw-full-token") + ["enter", "esc", "esc", "esc"]
+    keys = ["down", "enter"] + token_keys("rw-full-token") + ["esc", "esc", "esc"]
     app, term = make_app(keys, panel=panel, state=state)
     app.run("fix")
     assert seen(term, t("panel.token_rights.fix"))
@@ -379,10 +377,8 @@ def test_a_token_given_for_the_check_is_asked_about_before_changes():
 
 
 def test_a_kept_token_that_made_a_change_is_not_asked_about_again():
-    from helpers import login_keys
-
     panel, nodes = fleet()
-    app, _term = make_app(login_keys() + ["esc", "esc", "esc"], panel=panel)
+    app, _term = make_app(token_keys() + ["esc", "esc", "esc"], panel=panel)  # pasted (K30)
     app.run("check")
     state = app.env.state
     keep = ["enter"]  # the token of the check: keep it
@@ -392,7 +388,7 @@ def test_a_kept_token_that_made_a_change_is_not_asked_about_again():
 
 def test_a_token_in_another_layout_is_refused_without_a_crash():
     panel = build_panel()
-    keys = list("токен") + ["enter", "esc", "esc", "esc"]
+    keys = token_keys("токен") + ["esc", "esc", "esc"]
     app, term = make_app(keys, panel=panel)
     app.run("check")
     assert seen(term, t("panel.err.token"))
@@ -400,15 +396,28 @@ def test_a_token_in_another_layout_is_refused_without_a_crash():
 
 
 def test_retry_after_no_answer_sends_the_same_token_again():
-    from helpers import login_keys
-
     panel = build_panel()
     panel.fail("GET", "/nodes", 503, times=4)  # every try of the first request
-    keys = login_keys() + ["enter"] + ["esc", "esc", "esc"]  # Enter: «повторить»
+    keys = token_keys() + ["enter"] + ["esc", "esc", "esc"]  # Enter: «повторить»
     app, term = make_app(keys, panel=panel)
     app.run("check")
     assert any(t("panel.ok", nodes=6, hosts=10) in f for f in term.frames)
     assert app.env.state.read_panel_token() == TOKEN
+
+
+def test_retry_after_no_answer_keeps_the_token_kerberos_made():
+    """K30: the panel made the token, then did not answer GET /nodes: Enter tries the same
+    token again, no second login and no second token."""
+    from helpers import login_keys
+
+    panel = build_panel()
+    panel.fail("GET", "/nodes", 503, times=4)
+    app, term = make_app(login_keys() + ["enter"] + ["esc", "esc", "esc"], panel=panel)
+    app.run("check")
+    assert any(t("panel.ok", nodes=6, hosts=10) in f for f in term.frames)
+    assert len(panel.made_tokens) == 1 and panel.logins == ["admin"]
+    made = next(iter(panel.made_tokens.values()))["token"]
+    assert app.env.state.read_panel_token() == made
 
 
 def test_the_timer_leaves_a_3x_ui_run_to_the_terminal():

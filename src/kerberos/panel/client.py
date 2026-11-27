@@ -4,8 +4,11 @@ The live transport is urllib against the panel on this server; the fake is
 an in-memory panel (`kerberos.panel.fake`). The client logic (headers,
 retries, envelope, both host forms) is the same for both.
 
-KERBEROS signs in with an API token of the panel (§7.3): Remnawave accepts
-the admin login token only from its own web UI. The token is kept 0600 in
+KERBEROS works with an API token of the panel (§7.3): Remnawave accepts the
+admin login token only from its own web UI, and only that token may make an
+API token. So KERBEROS signs in as the admin once, with the browser header on
+those requests alone, makes its own API token and forgets the password and
+the login token (K30). The API token is kept 0600 in
 /var/lib/kerberos/panel.token by S2, never in a log or a run file.
 """
 
@@ -30,6 +33,11 @@ FORWARD_HEADERS = {
     "x-forwarded-for": "127.0.0.1",
     "x-real-ip": "127.0.0.1",
 }
+# The panel's web UI sends this with the admin login token; without it the panel refuses that
+# token to programs (§7.3). KERBEROS sends it only with that token, to make its own (K30).
+CLIENT_TYPE_HEADER = "x-remnawave-client-type"
+TOKEN_NAME = "KERBEROS"
+TOKEN_DAYS = 3650  # the panel makes no token without an expiry (K30)
 # Scope sections of the API token (§7.3), by the path KERBEROS calls.
 SECTIONS = {
     "/nodes": "nodes",
@@ -44,6 +52,18 @@ SECTIONS = {
 # the endpoint scope, not the whole write right of the section.
 SCOPES_CHECK = [f"{section}:read" for section in SECTIONS.values()]
 SCOPES_FIX = ["nodes:read", "nodes:update"] + [f"{s}:*" for s in SECTIONS.values() if s != "nodes"]
+
+
+def password_login(status: Any) -> bool:
+    """§7.3, step 1 (K30): whether the panel takes the admin password at all. An answer
+    without these fields (another version) counts as yes: the login itself will tell."""
+    if not isinstance(status, dict):
+        return True
+    if status.get("isLoginAllowed") is False:
+        return False
+    auth = status.get("authentication")
+    password = auth.get("password") if isinstance(auth, dict) else None
+    return not (isinstance(password, dict) and password.get("enabled") is False)
 
 
 def section_of(operation: str) -> tuple[str, str]:
@@ -96,9 +116,10 @@ class PanelClient:
         self.host_shape = "tags"
         self._shape_known = False  # learnt from GET /hosts before the first host is written
         self.calls: list[tuple[str, str]] = []
-        self.token_source = ""  # "saved" or "typed": S2 says which (§7.3)
+        self.token_source = ""  # "saved", "typed" or "made": S2 says which (§7.3, K30)
         self.refused = False  # the panel refused this token something (403)
         self.wrote = False  # the panel took a change with this token
+        self.password_login = True  # the panel takes the admin password (§7.3, K30)
 
     @property
     def authenticated(self) -> bool:
@@ -111,7 +132,11 @@ class PanelClient:
         self._token = None
 
     # -- transport -----------------------------------------------------
-    def request(self, method: str, path: str, body: Any = None, *, auth: bool = True) -> Any:
+    def request(
+        self, method: str, path: str, body: Any = None, *, auth: bool = True,
+        admin: Optional[str] = None,
+    ) -> Any:  # fmt: skip
+        """`admin`: the admin login token of `make_token`, sent as the web UI sends it."""
         headers = dict(FORWARD_HEADERS)
         headers["accept"] = "application/json"
         headers["user-agent"] = f"kerberos/{__version__}"
@@ -119,7 +144,11 @@ class PanelClient:
         if body is not None:
             headers["content-type"] = "application/json"
             data = json.dumps(body).encode("utf-8")
-        if auth and self._token:
+        with_token = admin is None and auth and bool(self._token)
+        if admin is not None:
+            headers["authorization"] = f"Bearer {admin}"
+            headers[CLIENT_TYPE_HEADER] = "browser"
+        elif with_token:
             headers["authorization"] = f"Bearer {self._token}"
         operation = f"{method} {path}"
         self.calls.append((method, path))
@@ -144,7 +173,7 @@ class PanelClient:
                 raise PanelError("unreachable", operation=operation, detail=str(exc)) from exc
             except ValueError as exc:
                 # Headers go out as Latin-1: a token with other letters cannot be a token.
-                code = "unauthorized" if auth and self._token else "bad_request"
+                code = "unauthorized" if with_token else "bad_request"
                 raise PanelError(code, operation=operation, detail="not Latin-1") from exc
             if status >= 500:
                 if attempt < len(RETRY_DELAYS):
@@ -156,11 +185,12 @@ class PanelClient:
         if status == 401:
             raise PanelError("unauthorized", 401, operation)
         if status == 403:
-            self.refused = True
+            # Only what the API token was refused counts: a wrong admin password does not.
+            self.refused = self.refused or with_token
             raise PanelError("forbidden", 403, operation, _message(raw))
         if status >= 400:
             raise PanelError("bad_request", status, operation, _message(raw))
-        if method != "GET":
+        if method != "GET" and with_token:
             self.wrote = True
         if status == 204:
             return None  # 3.x: bulk calls and deletes answer without a body (§7.2)
@@ -176,8 +206,30 @@ class PanelClient:
 
     # -- auth (§7.3) -----------------------------------------------------
     def reachable(self) -> None:
-        """The panel answers at all; what it says about its sign-in methods is not needed."""
-        self.request("GET", "/auth/status", auth=False)
+        """The panel answers at all; its answer says whether it takes the admin password."""
+        self.password_login = password_login(self.request("GET", "/auth/status", auth=False))
+
+    def make_token(
+        self, username: str, password: str, previous: Optional[str] = None
+    ) -> tuple[str, str]:
+        """§7.3, step 3 (K30): sign in as the admin of the panel, make the API token of
+        KERBEROS and delete the one KERBEROS made before (`previous`, its uuid). The new
+        (token, uuid); the client does not take the token itself.
+
+        The admin login token lives in this call only, and the browser header goes with it
+        alone. A failed login is 403 whatever the reason (wrong name, wrong password).
+        """
+        answer = self.request("POST", "/auth/login",
+                              {"username": username, "password": password}, auth=False)  # fmt: skip
+        session = schema.access_token(answer)
+        body = {"name": TOKEN_NAME, "expiresInDays": TOKEN_DAYS, "scopes": list(SCOPES_FIX)}
+        token, uuid = schema.api_token(self.request("POST", "/tokens", body, admin=session))
+        if previous and previous != uuid:
+            try:
+                self.request("DELETE", f"/tokens/{previous}", admin=session)
+            except PanelError:
+                pass  # deleted in the panel already (404), or it stays in the panel's list
+        return token, uuid
 
     # -- reading ---------------------------------------------------------
     def nodes(self) -> list[Node]:

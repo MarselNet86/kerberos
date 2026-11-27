@@ -37,10 +37,11 @@ def typed(text: str) -> list[str]:
     return ["space" if ch == " " else ch for ch in text]
 
 
-# S2 API token (the demo panel takes any); S3 all nodes; S4: kz-1 skipped, one table of
-# host keys, python3 for de-1, «Мои ключи», the summary; whois allowed; S6 → S7. The keys
-# of S7 come from the plan itself (plan_keys).
-TO_PLAN = typed("rw-demo-token") + ["enter"]
+# S2 the admin's login and password, KERBEROS makes its token (K30; the demo panel takes
+# any); S3 all nodes; S4: kz-1 skipped, one table of host keys, python3 for de-1, «Мои
+# ключи», the summary; whois allowed; S6 → S7. The keys of S7 come from the plan itself
+# (plan_keys).
+TO_PLAN = typed("admin") + ["tab"] + typed("demo-password") + ["enter"]
 TO_PLAN += ["enter"] + ["esc", "enter", "enter"] + ["enter", "enter"]
 TO_PLAN += ["enter", "enter", "enter"]
 APPLY = ["enter", "enter", "enter"]  # S7 → consent → accept → S9 Enter

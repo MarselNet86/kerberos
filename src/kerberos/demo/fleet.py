@@ -121,7 +121,7 @@ USER_TEMPLATE = {
 
 def build_panel(shape: str = "tags") -> FakePanel:
     seed_uuids(20261116)
-    panel = FakePanel(shape=shape, accept_any_token=True)
+    panel = FakePanel(shape=shape, accept_any_token=True, accept_any_login=True)
     nl1 = raw_profile(
         "NL-1",
         profile_config(

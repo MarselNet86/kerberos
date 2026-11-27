@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
 DEFAULT_ROOT = Path("/var/lib/kerberos")
 LOCK_STEP = 5.0  # seconds between two tries of a lock that is busy
 ADMIN_MODES = ("mine", "create")  # the answers of §8.5 that are remembered (K25)
+UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
 class Locked(Exception):
@@ -130,7 +132,8 @@ class State:
         os.replace(tmp, path)
 
     def _panel_token(self) -> dict:
-        """{token, write}: `write` once the token was given for changes or made one (§7.3)."""
+        """{token, write, uuid} (§7.3): `write` once the token was made by KERBEROS, given
+        for changes or made one; `uuid` only for a token KERBEROS made itself (K30)."""
         try:
             text = self.panel_token.read_text(encoding="utf-8").strip()
         except OSError:
@@ -139,24 +142,43 @@ class State:
             data = json.loads(text)
         except ValueError:
             return {"token": text} if text else {}  # a bare token: its rights are not known
-        return data if isinstance(data, dict) and isinstance(data.get("token"), str) else {}
+        return data if isinstance(data, dict) else {}
 
     def read_panel_token(self) -> Optional[str]:
         """The Remnawave API token S2 saved (§7.3); None when there is none."""
-        return self._panel_token().get("token") or None
+        token = self._panel_token().get("token")
+        return token if isinstance(token, str) and token else None
 
     def panel_token_can_write(self) -> bool:
-        return self._panel_token().get("write") is True
+        return self.read_panel_token() is not None and self._panel_token().get("write") is True
 
-    def write_panel_token(self, token: str, write: bool) -> None:
+    def panel_token_uuid(self) -> Optional[str]:
+        """The panel's uuid of the token KERBEROS made itself (K30): only that one KERBEROS
+        may delete. None for a token the person pasted."""
+        value = self._panel_token().get("uuid")
+        return value if isinstance(value, str) and UUID_RE.fullmatch(value) else None
+
+    def write_panel_token(self, token: str, write: bool, uuid: Optional[str] = None) -> None:
         self.ensure()
-        data = {"token": token.strip(), "write": bool(write)}
+        data: dict = {"token": token.strip(), "write": bool(write)}
+        if uuid:
+            data["uuid"] = uuid
         self.write_private(self.panel_token, json.dumps(data) + "\n")
 
     def mark_panel_token_writable(self) -> None:
         token = self.read_panel_token()
         if token and not self.panel_token_can_write():
-            self.write_panel_token(token, True)
+            self.write_panel_token(token, True, self.panel_token_uuid())
+
+    def forget_panel_token(self) -> None:
+        """The panel refused the token (§7.3): it goes. Of a token KERBEROS made the uuid
+        stays, so that the next login deletes it in the panel (K30)."""
+        uuid = self.panel_token_uuid()
+        if uuid is None:
+            self.panel_token.unlink(missing_ok=True)
+            return
+        self.ensure()
+        self.write_private(self.panel_token, json.dumps({"uuid": uuid}) + "\n")
 
     # -- answers.json (K25) -----------------------------------------------------
     def answers(self) -> dict:

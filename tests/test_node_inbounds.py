@@ -8,12 +8,13 @@ listened on UDP 443 while the subscription handed out the Hysteria2 hosts.
 import json
 
 import pytest
-from helpers import TOKEN
+from helpers import TOKEN, login_keys, make_app, token_keys
 from test_review_logic import (
     APPLY,
     DONE,
     NL1,
     ROLLBACK,
+    TO_PLAN,
     changes_of,
     domain_keys,
     fix,
@@ -170,7 +171,11 @@ def test_a_token_without_nodes_update_undoes_the_self_steal():
     panel.add_api_token(TOKEN, scopes=tuple(OLD_SCOPES))
     profile = json.loads(json.dumps(profile_of(panel, "nl-1")["config"]))
     reality = active_tags(panel, "nl-1")
-    app, _term, code = fix(domain_keys(NL1, "nl-1.example.com") + APPLY + DONE, panel, nodes)
+    # The person pastes this token of their own (K30): «У меня есть API-токен».
+    keys = token_keys() + TO_PLAN[len(login_keys()) :] + domain_keys(NL1, "nl-1.example.com")
+    app, _term = make_app(keys + APPLY + DONE, panel=panel, nodes=list(nodes.values()),
+                          height=46)  # fmt: skip
+    code = app.run("fix")
     assert code == EXIT_PARTIAL
     run = fix_run(app)
     node_change = changes_of(run, "self_steal.node")[0]

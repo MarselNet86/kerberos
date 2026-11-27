@@ -23,7 +23,9 @@ ROLLBACK_LOGIN = ["enter", "enter", "enter"] + list("admin") + ["enter"] + list(
 
 
 def fix_run(extra, nodes=None, height=40, state=None):
-    keys = TO_PLAN + list(extra)
+    # A later run with a saved token: S2 asks nothing (§7.3), so no login is typed.
+    saved = state is not None and state.read_panel_token() is not None
+    keys = (TO_PLAN[len(login_keys()) :] if saved else TO_PLAN) + list(extra)
     app, term = make_app(keys, nodes=nodes, height=height, state=state)
     code = app.run("fix")
     return app, term, code

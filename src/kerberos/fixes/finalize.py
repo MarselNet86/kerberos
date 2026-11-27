@@ -135,8 +135,8 @@ def unattended(store: RunStore, transport: Any, clock: Clock, run_id: Optional[s
         if finalize_items(client, store, [(r, i) for r, i in pairs if r is run]):
             code = 3
         if client.refused:
-            # Not allowed to change the profile: the person gives a token with that right.
-            store.state.panel_token.unlink(missing_ok=True)
+            # Not allowed to change the profile: the next run in the terminal signs in again.
+            store.state.forget_panel_token()
             return 3
         if client.wrote:
             store.state.mark_panel_token_writable()

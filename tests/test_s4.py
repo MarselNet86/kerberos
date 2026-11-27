@@ -70,7 +70,7 @@ def test_host_key_change_stops_commands_to_the_node():
     state = app.env.state
     nodes[0].host_key = PublicKey("ssh-ed25519", demo_blob("reinstalled"))
     keys = AGAIN_S4 + ["esc"] + INTRO + ["esc"] + ["enter", "x"] + QUIT  # kz-1; skip nl-1's key
-    app, term = make_app(keys, nodes=nodes, state=state, panel=strict_panel())
+    app, term = make_app(keys, nodes=nodes, state=state, panel=app.env.panel_transport)
     start = len(app.env.transport.log)
     app.run("check")
     assert seen(term, t("access.hostkey_changed", node="nl-1"))
@@ -86,7 +86,7 @@ def test_new_host_key_can_be_confirmed():
     nodes[0].host_key = PublicKey("ssh-ed25519", demo_blob("reinstalled"))
     # «Пропустить ноду» is preselected for a changed key: ↑ to confirm it.
     keys = AGAIN_S4 + ["esc"] + INTRO + ["up", "enter"] + ["enter", "x"] + QUIT
-    app, term = make_app(keys, nodes=nodes, state=state, panel=strict_panel())
+    app, term = make_app(keys, nodes=nodes, state=state, panel=app.env.panel_transport)
     app.run("check")
     assert state.pinned("203.0.113.10", 22) == demo_blob("reinstalled")
     assert state.find_node("nl-1").access == "ok"
@@ -100,7 +100,7 @@ def test_known_nodes_skip_the_bootstrap():
         AGAIN_S4 + ["esc"] + ["enter", "x"] + QUIT,
         nodes=nodes,
         state=state,
-        panel=strict_panel(),
+        panel=app.env.panel_transport,
     )
     app.run("check")
     log = [cmd for addr, cmd in app.env.transport.log if addr == "203.0.113.10"]
@@ -113,7 +113,8 @@ def test_bootstrap_again_duplicates_nothing():
     app, _ = run_check(nodes)
     state = app.env.state
     state.nodes_file.unlink()
-    app, _ = run_check(nodes, state, extra=["esc"] + INTRO)  # the keys are pinned already
+    same = app.env.panel_transport  # the token of the first run lives in this panel (K30)
+    app, _ = run_check(nodes, state, panel=same, extra=["esc"] + INTRO)  # keys pinned already
     for node in nodes[:4]:
         assert len(kerberos_lines(node)) == 1, node.name
 
@@ -122,7 +123,8 @@ def test_old_agent_is_updated():
     nodes = build_nodes()
     app, _ = run_check(nodes)
     nodes[0].agent_sha = "0" * 64
-    app, _ = run_check(nodes, app.env.state, extra=["esc"])  # kz-1
+    same = app.env.panel_transport
+    app, _ = run_check(nodes, app.env.state, panel=same, extra=["esc"])  # kz-1
     assert nodes[0].agent_sha == bootstrap.agent_sha256()
     assert any(
         cmd.startswith("update ") for addr, cmd in app.env.transport.log if addr == "203.0.113.10"
@@ -133,7 +135,9 @@ def test_new_panel_address_sets_access_up_again():
     nodes = build_nodes()
     app, _ = run_check(nodes)
     nodes[0].panel_ip = "198.51.100.6"
-    app, _ = run_check(nodes, app.env.state, extra=["esc"] + INTRO)  # kz-1; set nl-1 up again
+    same = app.env.panel_transport
+    # kz-1; set nl-1 up again
+    app, _ = run_check(nodes, app.env.state, panel=same, extra=["esc"] + INTRO)
     lines = kerberos_lines(nodes[0])
     assert len(lines) == 1 and lines[0].startswith('from="198.51.100.6"')
 
