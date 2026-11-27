@@ -64,7 +64,9 @@ def test_discovery_reads_only_named_settings():
     assert location.api == "https://127.0.0.1:54321/secret-path/"
     assert location.info == {"port": 54321, "secretPath": True, "tls": True, "listen": "",
                              "subPort": 2096, "twoFactor": False, "db": XUI_DB,
-                             "dbFolder": "", "envPort": False}  # fmt: skip
+                             "dbFolder": "", "envPort": False,
+                             "routing": {"happ": False, "enabled": False, "rules": "",
+                                         "json": False, "jsonRules": ""}}  # fmt: skip
     assert "hunter2" not in repr(location) and "s3cr3t" not in repr(location)
 
 

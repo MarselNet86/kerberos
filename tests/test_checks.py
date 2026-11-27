@@ -27,7 +27,7 @@ SECTION_10_2 = {
     "sub.probe_interval", "exit.ru_traffic", "reserve.missing", "reserve.same_asn",
     "node.blocked", "watch.missing", "ssh.open",
 }  # fmt: skip
-XUI_ONLY = {"xui.panel_exposed", "xui.panel_tls", "xui.panel_2fa"}  # §7.6, test_xui_model.py
+XUI_ONLY = {"xui.panel_exposed", "xui.panel_tls", "xui.panel_2fa", "xui.sub_ru_direct"}  # §7.6
 # K17: findings only on nodes with renewals on :80 or the site of KERBEROS; the demo fleet has
 # neither, so its score (38 → 77, §12.4) stays. Covered in test_renewal_checks.py.
 RENEWALS = {"acme.port80", "acme.stop_hook"}
