@@ -26,6 +26,8 @@ NODE_ORDER = (
     "hostkeys.regenerate",
     "ssh.key_only",
     "ssh.port",
+    # After a new port: the rule covers the ports SSH holds once the port moved (K28).
+    "ssh.panel_only",
     "node.letsencrypt_mount",
     "self_steal",
     "cdn.edge_only",
@@ -47,7 +49,7 @@ PANEL_NODE_FIXES = {"xhttp.padding"}
 # the login of the portal (§10.10).
 NEEDS_INPUT = {"self_steal", "cdn.edge_only", "panel.portal"}
 # Changes of how the person gets in: never marked by default nor by `a` (§6 S7).
-PERSON_MARKS = {"ssh.port", "xui.panel_hide", "panel.portal"}
+PERSON_MARKS = {"ssh.port", "ssh.panel_only", "xui.panel_hide", "panel.portal"}
 
 # Fixes this version of KERBEROS can apply; the rest stay findings in the report.
 IMPLEMENTED = {
@@ -59,6 +61,7 @@ IMPLEMENTED = {
     "hostkeys.regenerate",
     "ssh.key_only",
     "ssh.port",
+    "ssh.panel_only",
     "self_steal",
     "sub.template",
     "sub.ping_type",
@@ -70,7 +73,7 @@ IMPLEMENTED = {
     "panel.portal",
     "xui.panel_hide",
 }
-ACCESS_FIXES = {"ssh.key_only", "ssh.port", "hostkeys.regenerate"}
+ACCESS_FIXES = {"ssh.key_only", "ssh.port", "hostkeys.regenerate", "ssh.panel_only"}
 RISK_RANK = {"high": 0, "medium": 1, "low": 2, "info": 3}
 
 
@@ -120,6 +123,8 @@ def node_params(
         return {"sshPorts": list(facts["ssh"]["ports"]), "panelIp": panel_ip}
     if fix_id == "node_api.panel_only":
         return {"port": facts["nodeApi"]["port"], "panelIp": panel_ip}
+    if fix_id == "ssh.panel_only":
+        return {"panelIp": panel_ip}
     if fix_id == "ports.drop":
         return {"ports": list(finding["evidence"].get("ports", []))}
     return {}
@@ -194,14 +199,24 @@ def build_plan(
             # rule would cut the panel off. No such fact (an older agent): not known, not blocked.
             if (facts.get("nodeApi") or {}).get("panelPeer") is False:
                 item.blocked = "panel_peer"
-        if item.fix_id == "ssh.key_only" and not (facts.get("ssh") or {}).get("adminKeys"):
+        if item.fix_id == "ssh.panel_only" and item.params.get("panelIp") in (
+            list(facts.get("ipv4") or []) + list(facts.get("ipv6") or [])
+        ):
+            item.blocked = "panel_local"  # K28: the panel server is this node itself
+        if (
+            item.fix_id in ("ssh.key_only", "ssh.panel_only")
+            and item.blocked is None
+            and not (facts.get("ssh") or {}).get("adminKeys")
+        ):
             mode = (admin or {}).get("mode", "skip")
             if mode in ("mine", "create"):
                 keys = list((admin or {}).get("keys", []))
                 extra = PlanItem("access.admin_keys", item.target, item.node_uuid,
                                  {"keys": keys, "create": mode == "create"}, item.risk,
                                  ["ssh.password"])  # fmt: skip
-                items[extra.key] = extra
+                known = items.get(extra.key)
+                if known is None or RISK_RANK[item.risk] < RISK_RANK[known.risk]:
+                    items[extra.key] = extra
             else:
                 item.blocked = "no_admin_key"
     for item in items.values():
@@ -352,11 +367,13 @@ def xui_port(data: CheckInput, node, port: int) -> bool:
 
 
 def follow_admin_key(items: list[PlanItem]) -> None:
-    """The admin key goes with ssh.key_only: one is marked only with the other."""
+    """The admin key goes with ssh.key_only and ssh.panel_only (K28): it is marked when
+    one of them is, and only then."""
     by_target = {}
     for item in items:
         by_target.setdefault(item.target, {})[item.fix_id] = item
     for fixes in by_target.values():
-        admin, key_only = fixes.get("access.admin_keys"), fixes.get("ssh.key_only")
-        if admin and key_only:
-            admin.selected = key_only.selected
+        admin = fixes.get("access.admin_keys")
+        needing = [fixes[f] for f in ("ssh.key_only", "ssh.panel_only") if f in fixes]
+        if admin and needing:
+            admin.selected = any(item.selected for item in needing)
