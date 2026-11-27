@@ -6,15 +6,19 @@ keys or a key forwarded with `ssh -A`, else hand the terminal to `ssh` for the
 node password, unless the node takes only keys; install the agent
 and the restricted KERBEROS key; prove the access with a new connection.
 Nodes that already have access get their agent version checked (§8.3).
-In «Проверка» the screen first says what it installs and that settings stay
-as they are; Esc there goes back before anything is installed. In
-«Исправление» the person chooses the administrator key on every entry to S4
-(§8.5); the keys reach the nodes only after consent, as a planned change.
+The host keys of all new nodes are scanned together and confirmed in one
+table (K25); in «Проверка» that table also says what S4 installs and that
+settings stay as they are, and Esc there goes back before anything is
+installed. A changed key is still asked node by node. In «Исправление» the
+person chooses the administrator key (§8.5) once: the answer is kept in
+answers.json, and `k` on the summary asks again; the keys reach the nodes
+only after consent, as a planned change.
 """
 
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from rich import box
@@ -28,7 +32,9 @@ from kerberos.nodes import bootstrap
 from kerberos.nodes.keys import fingerprint, parse_authorized_keys, parse_key
 from kerberos.nodes.transport import NodeAgentError, Target, TransportError, ssh_host
 from kerberos.panel.model import Node
+from kerberos.screens.panel import panel_line
 from kerberos.state import NodeRecord
+from kerberos.ui.keys import hotkey
 from kerberos.ui.widgets import Checklist, Menu, Notice, TextInput
 
 if TYPE_CHECKING:
@@ -39,6 +45,7 @@ LOCAL_ADDRESS = "127.0.0.1"
 LOCAL_HOST_KEY = "/etc/ssh/ssh_host_ed25519_key.pub"
 ROOT_KEYS = "/root/.ssh/authorized_keys"
 PASSWORD_METHODS = {"password", "keyboard-interactive"}
+SCAN_WORKERS = 4  # host keys scanned at once, as S5 collects (§6)
 
 
 def local_ssh_port(host: Any) -> int:
@@ -109,17 +116,23 @@ class Fitted:
     so the question and its answers always fit the screen."""
 
     def __init__(
-        self, table: Callable[[Optional[int]], Table], tail: list[RenderableType], height: int
+        self,
+        table: Callable[[Optional[int]], Table],
+        tail: list[RenderableType],
+        height: int,
+        head: Optional[list[RenderableType]] = None,
     ) -> None:
         self.table = table
         self.tail = tail
         self.height = height
+        self.head = head or []
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
-        tail = Group(*self.tail)
+        tail = Group(*self.head, *self.tail)
         used = len(console.render_lines(tail, options.update(height=None), pad=False))
+        yield from self.head
         yield self.table(max(1, self.height - used - 3))  # header, rule and caption
-        yield tail
+        yield Group(*self.tail)
 
 
 class AccessScreen:
@@ -171,7 +184,8 @@ class AccessScreen:
                 tail += [Text(""), Text(self.action, style="accent")]
             if extra:
                 tail += [Text(""), *extra]
-            return Fitted(self.table, tail, height)
+            head = panel_line(self.app, self.session) if self.local else []
+            return Fitted(self.table, tail, height, head)
 
         return body
 
@@ -273,46 +287,138 @@ class AccessScreen:
                 state.pin(target.address, target.port, "ssh-ed25519", blob)
         return target
 
-    def pin_host_key(self, node: Node, target: Target, record: Optional[NodeRecord]) -> Target:
+    # -- host keys (K25) --------------------------------------------------------
+    def scan(self, targets: list[Target]) -> list[Optional[Any]]:
+        """ssh-keyscan of every target, a few at once; the keys in the order given."""
+        transport = self.app.env.transport
+        if len(targets) <= 1:
+            return [transport.keyscan(x.address, x.port) for x in targets]
+        with ThreadPoolExecutor(max_workers=SCAN_WORKERS) as pool:
+            return list(pool.map(lambda x: transport.keyscan(x.address, x.port), targets))
+
+    def fail(self, node: Node, status: str, reason: str) -> None:
+        self.status[node.uuid] = status
+        self.reasons[node.uuid] = reason
+
+    def prepare(self, fresh: list[tuple[Node, Optional[NodeRecord]]]) -> Any:
+        """The host keys of every node to set up: new ones in one table, changed ones
+        one by one (§8.1). The (node, target) pairs to set up with their keys pinned,
+        or BACK when the person went back before anything was installed."""
         transport, state = self.app.env.transport, self.app.env.state
-        while True:
-            self.show(t("access.checking_key", node=self.app.mask(node.name)))
-            key = transport.keyscan(target.address, target.port)
-            if key is not None:
-                break
-            port = self.ask_port(node, target.port)
-            if port is None:
-                raise AccessFailed(NONE, t("access.reason.unreachable"))
-            target = Target(target.uuid, target.name, target.address, port)
-        pinned = state.pinned(target.address, target.port)
-        value = key.fingerprint
-        self.seen_keys[node.uuid] = value
-        name = self.app.mask(node.name)
-        if pinned is not None and pinned != key.blob:
-            # A changed key may be an interception: one Enter must not accept it.
-            lines: list[RenderableType] = [
-                Notice("error", t("access.hostkey_changed", node=name)),
-                Text(t("access.hostkey_old", fingerprint=fingerprint(pinned))),
-                Text(t("access.hostkey_new", fingerprint=value)),
-            ]
-            items = [("yes", t("access.accept_new"), ""), ("no", t("access.skip"), "")]
-            selected = 1
-        elif pinned is None:
-            lines = [
-                Text(t("access.hostkey", node=name, fingerprint=value)),
-                Text(t("access.hostkey_hint"), style="muted"),
-            ]
-            items = [("yes", t("access.yes"), ""), ("no", t("access.no"), "")]
-            selected = 0
+        targets = {n.uuid: self.ssh_target(n, r) for n, r in fresh}
+        self.show(t("access.scanning_keys", n=len(fresh)))
+        keys = dict(zip([n.uuid for n, _ in fresh],
+                        self.scan([targets[n.uuid] for n, _ in fresh])))  # fmt: skip
+        ready = []
+        for node, _record in fresh:
+            target = targets[node.uuid]
+            while keys[node.uuid] is None:
+                self.action = t("access.checking_key", node=self.app.mask(node.name))
+                port = self.ask_port(node, target.port)
+                if port is None:
+                    break
+                target = Target(target.uuid, target.name, target.address, port)
+                self.show(t("access.checking_key", node=self.app.mask(node.name)))
+                keys[node.uuid] = transport.keyscan(target.address, port)
+            if keys[node.uuid] is None:
+                self.fail(node, NONE, t("access.reason.unreachable"))
+                continue
+            targets[node.uuid] = target
+            self.seen_keys[node.uuid] = keys[node.uuid].fingerprint
+            ready.append(node)
+        new = [n for n in ready if state.pinned(targets[n.uuid].address, targets[n.uuid].port)
+               is None]  # fmt: skip
+        changed = [n for n in ready if n not in new and keys[n.uuid].blob !=
+                   state.pinned(targets[n.uuid].address, targets[n.uuid].port)]  # fmt: skip
+        intro = self.session.mode == "check" and not self.session.data.get("intro_seen")
+        if new:
+            chosen = self.confirm_new(new, keys, targets, intro)
+            if chosen is None:
+                return BACK
+        elif ready and not self.intro():
+            return BACK
         else:
-            return target
-        same = self.same_key(node, value)
+            chosen = set()
+        self.session.data["intro_seen"] = True
+        accepted = []
+        for node in ready:
+            target, key = targets[node.uuid], keys[node.uuid]
+            if node in new and node.uuid not in chosen:
+                self.fail(node, DENIED, t("access.reason.declined"))
+                continue
+            if node in changed and not self.confirm_changed(node, target, key):
+                self.fail(node, DENIED, t("access.reason.declined"))
+                continue
+            if node in new or node in changed:
+                state.pin(target.address, target.port, key.type, key.blob)
+            accepted.append((node, target))
+        return accepted
+
+    def confirm_new(self, new: list[Node], keys: dict, targets: dict, intro: bool) -> Any:
+        """One table of the new host keys, all marked (K25): the uuids the person
+        confirmed, or None on Esc. In «Проверка» the table also says what S4 installs."""
+        rows = []
+        for node in new:
+            target = targets[node.uuid]
+            address = self.app.mask(target.address)
+            if target.port != 22:
+                address += f":{target.port}"
+            fingerprint = keys[node.uuid].fingerprint.removeprefix("SHA256:")
+            rows.append([self.app.mask(node.name), address, fingerprint])
+        checklist = Checklist(rows, [t("access.col.node"), t("access.col.address"),
+                                     t("access.col.fingerprint.sha256")],
+                              selected=set(range(len(new))), flexible=0, min_width=6)  # fmt: skip
+        notes: list[RenderableType] = []
+        groups: dict[str, list[str]] = {}
+        for node in new:
+            groups.setdefault(keys[node.uuid].fingerprint, []).append(node.uuid)
+        for node in new:
+            same = self.same_key(node, keys[node.uuid].fingerprint)
+            group = groups[keys[node.uuid].fingerprint]
+            if same and node.uuid == group[0]:
+                names = [self.app.mask(node.name), *same]
+                notes.append(Text(t("access.hostkey_same", nodes=", ".join(names)),
+                                  style="risk.medium"))  # fmt: skip
+
+        def body(_width: int, height: int) -> RenderableType:
+            head: list[RenderableType] = []
+            if intro:
+                head += [Notice("info", t("access.intro")), Text("")]
+            head.append(Text(t("access.hostkeys"), style="bold"))
+            tail = [Text(t("access.hostkey_hint"), style="muted"), *notes]
+            tail.append(Text(t("access.hostkeys.selected", n=len(checklist.selected),
+                               total=len(new)), style="muted"))  # fmt: skip
+            fixed = 5 + 2 * len(notes) + (6 if intro else 0)  # title, hint, notes, count
+            checklist.viewport = max(4, height - fixed)
+            return Group(*head, checklist, Text(""), *tail)
+
+        def handle(key: str) -> Optional[str]:
+            if key == "esc":
+                return "back"
+            return checklist.handle(key)
+
+        keys_hint = ((t("keys.space"), t("keys.toggle")), ("a", t("keys.all")),
+                     ("Enter", t("access.hostkeys.confirm")), ("Esc", t("keys.back")),
+                     ("q", t("keys.quit")))  # fmt: skip
+        self.action = ""
+        if self.app.interact(self.title, body, keys_hint, handle) == "back":
+            return None
+        return {new[i].uuid for i in checklist.selected}
+
+    def confirm_changed(self, node: Node, target: Target, key: Any) -> bool:
+        """A changed key may be an interception: one Enter must not accept it (§8.1)."""
+        pinned = self.app.env.state.pinned(target.address, target.port) or ""
+        name = self.app.mask(node.name)
+        lines: list[RenderableType] = [
+            Notice("error", t("access.hostkey_changed", node=name)),
+            Text(t("access.hostkey_old", fingerprint=fingerprint(pinned))),
+            Text(t("access.hostkey_new", fingerprint=key.fingerprint)),
+        ]
+        same = self.same_key(node, key.fingerprint)
         if same:
             lines.append(Text(t("access.hostkey_same", nodes=", ".join(same)), style="risk.medium"))
-        if self.ask_menu(Group(*lines), items, selected) != "yes":
-            raise AccessFailed(DENIED, t("access.reason.declined"))
-        state.pin(target.address, target.port, key.type, key.blob)
-        return target
+        items = [("yes", t("access.accept_new"), ""), ("no", t("access.skip"), "")]
+        return self.ask_menu(Group(*lines), items, 1) == "yes"
 
     def login(self, node: Node, target: Target) -> None:
         transport = self.app.env.transport
@@ -367,9 +473,9 @@ class AccessScreen:
             )
             raise AccessFailed(NONE, t("access.reason.verify")) from exc
 
-    def setup(self, node: Node, record: Optional[NodeRecord], public_key: str) -> None:
+    def setup(self, node: Node, target: Target, public_key: str) -> None:
+        """Log in, install and prove the access of a node whose host key is pinned."""
         transport, state = self.app.env.transport, self.app.env.state
-        target = self.pin_host_key(node, self.ssh_target(node, record), record)
         self.login(node, target)
         try:
             answer = self.install(node, target, public_key)
@@ -463,6 +569,7 @@ class AccessScreen:
             self.app.notice("error", exc.reason, self.title)
             return BACK
         state = self.app.env.state
+        fresh: list[tuple[Node, Optional[NodeRecord]]] = []
         for node in self.nodes:
             if self.status.get(node.uuid) == OK:
                 continue
@@ -471,29 +578,91 @@ class AccessScreen:
                 if record and record.access == OK and self.refresh(node, record):
                     self.status[node.uuid] = OK
                     continue
-                if not self.intro():
-                    return BACK
-                if self.local:
-                    self.setup_local(node, public_key)
-                else:
-                    self.setup(node, record, public_key)
-                self.status[node.uuid] = OK
             except AccessFailed as exc:
-                self.status[node.uuid] = exc.status
-                self.reasons[node.uuid] = exc.reason
+                self.fail(node, exc.status, exc.reason)
+                continue
+            fresh.append((node, record))
+        if fresh and self.local:
+            if not self.intro():
+                return BACK
+            for node, _record in fresh:
+                try:
+                    self.setup_local(node, public_key)
+                    self.status[node.uuid] = OK
+                except AccessFailed as exc:
+                    self.fail(node, exc.status, exc.reason)
+        elif fresh:
+            accepted = self.prepare(fresh)
+            if accepted == BACK:
+                return BACK
+            for node, target in accepted:
+                try:
+                    self.setup(node, target, public_key)
+                    self.status[node.uuid] = OK
+                except AccessFailed as exc:
+                    self.fail(node, exc.status, exc.reason)
         self.action = ""
         if self.local:
             # The person's own keys are already on this server: nothing to copy (§8.5).
             self.session.data["admin"] = {"mode": "local", "keys": [], "own": self.own_keys()}
-        elif self.session.mode == "fix":
-            # Asked on every entry to S4: going back is how a skipped answer gets changed.
-            self.session.data["admin"] = self.ask_admin(self.session.data.get("admin"))
+        elif self.session.mode == "fix" and "admin" not in self.session.data:
+            self.session.data["admin"] = self.admin_answer()
         return self.summary()
 
-    def own_keys(self) -> int:
-        """How many keys of the person, not of KERBEROS, let root into this server."""
+    # -- answers kept between runs (K25) ---------------------------------------
+    def remembered_admin(self) -> Optional[dict]:
+        """The answer of §8.5 from answers.json while it still fits: «Мои ключи» while one
+        of its keys is still on the panel server, «Создать» while admin_ed25519 is."""
+        state = self.app.env.state
+        answer = state.answers().get("admin") if state is not None else None
+        if not answer:
+            return None
+        if answer["mode"] == "create":
+            return {"mode": "create", "keys": []} if state.admin_key.exists() else None
+        wanted = set(answer["keys"])
+        lines = [k.line for k in self.own_list() if k.fingerprint in wanted]
+        return {"mode": "mine", "keys": lines} if lines else None
+
+    def admin_answer(self) -> dict:
+        """The remembered answer, else the question (§8.5); the answer is remembered."""
+        return self.remembered_admin() or self.choose_admin(self.last_admin())
+
+    def last_admin(self) -> Optional[dict]:
+        """What to preselect when the question comes back: the session's answer, else the
+        remembered one (its keys as lines of the panel server)."""
+        if self.session.data.get("admin"):
+            return self.session.data["admin"]
+        state = self.app.env.state
+        answer = state.answers().get("admin") if state is not None else None
+        if not answer:
+            return None
+        wanted = set(answer["keys"])
+        return {"mode": answer["mode"],
+                "keys": [k.line for k in self.own_list() if k.fingerprint in wanted]}  # fmt: skip
+
+    def choose_admin(self, previous: Optional[dict] = None) -> dict:
+        answer = self.ask_admin(previous)
+        state = self.app.env.state
+        if state is not None:
+            if answer["mode"] == "skip":
+                state.remember(admin=None)  # it leaves the password login: asked again
+            else:
+                prints = {k.line: k.fingerprint for k in self.own_list()}
+                keys = [prints[line] for line in answer["keys"] if line in prints]
+                state.remember(admin={"mode": answer["mode"], "keys": keys})
+        return answer
+
+    def whois_answer(self) -> Optional[bool]:
+        state = self.app.env.state
+        return state.answers().get("whois") if state is not None else None
+
+    def own_list(self) -> list:
+        """The keys of the person, not of KERBEROS, that let root into this server."""
         text = self.app.env.host.read_text(ROOT_KEYS) or ""
-        return sum(1 for k in parse_authorized_keys(text) if not k.is_kerberos)
+        return [k for k in parse_authorized_keys(text) if not k.is_kerberos]
+
+    def own_keys(self) -> int:
+        return len(self.own_list())
 
     def summary(self) -> Any:
         ok = sum(1 for n in self.nodes if self.status.get(n.uuid) == OK)
@@ -516,18 +685,44 @@ class AccessScreen:
             key = "access.admin.local.some" if own else "access.admin.local.none"
             lines.append(Text(t(key, n=own), style="muted"))
         elif admin:
-            lines.append(Text(t("access.admin.chosen." + admin["mode"]), style="muted"))
+            mode = admin["mode"]
+            lines.append(Text(t("access.answer.admin." + mode, n=len(admin.get("keys") or [])),
+                              style="muted"))  # fmt: skip
+        whois = self.whois_answer() if self.asks_whois() else None
+        if whois is not None:
+            lines.append(Text(t("access.answer.whois." + ("yes" if whois else "no")),
+                              style="muted"))  # fmt: skip
 
         def handle(key: str) -> Optional[str]:
             if key == "enter":
                 return NEXT
             if key == "esc":
                 return BACK
+            if hotkey(key) == "k" and admin and admin["mode"] != "local":
+                return "admin"
+            if hotkey(key) == "w" and whois is not None:
+                return "whois"
             return None
 
-        keys = (("Enter", t("keys.next")), ("Esc", t("keys.back")), ("q", t("keys.quit")))
+        keys: list = [("Enter", t("keys.next")), ("Esc", t("keys.back"))]
+        if admin and admin["mode"] != "local":
+            keys.append(("k", t("keys.admin_key")))
+        if whois is not None:
+            keys.append(("w", t("keys.whois")))
+        keys.append(("q", t("keys.quit")))
         self.action = ""
-        return self.app.interact(self.title, self.frame(*lines), keys, handle)
+        answer = self.app.interact(self.title, self.frame(*lines), tuple(keys), handle)
+        if answer == "admin":
+            self.session.data["admin"] = self.choose_admin(admin)
+            return self.summary()
+        if answer == "whois":
+            self.app.env.state.remember(whois=not whois)
+            return self.summary()
+        return answer
+
+    def asks_whois(self) -> bool:
+        """whois only matters with two nodes and more (§10.2, theme 1)."""
+        return len(self.nodes) >= 2
 
     def ask_admin(self, previous: Optional[dict] = None) -> dict:
         """§8.5: which key keeps the person's own access; the last answer is preselected."""
