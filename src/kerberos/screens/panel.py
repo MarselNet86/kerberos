@@ -1,8 +1,9 @@
 """S2. Panel (tech.md §6, §7): find the panel, sign in from the window, read it.
 
 Remnawave lets programs in only with an API token (§7.3): the saved one in
-/var/lib/kerberos/panel.token, else one typed into a secret field and saved
-once the panel accepts it. 3x-ui takes a login and a password, kept in memory.
+/var/lib/kerberos/panel.token; else KERBEROS makes its own with the admin's
+login and password, typed here and forgotten at once (K30), or the person
+pastes a token of their own. 3x-ui takes a login and a password, kept in memory.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from kerberos.panel.client import SCOPES_CHECK, SCOPES_FIX, PanelClient, section
 from kerberos.panel.discover import PanelLocation, discover, discover_xui
 from kerberos.panel.errors import PanelError
 from kerberos.panel.model import PanelSnapshot
-from kerberos.ui.widgets import Menu, Notice, TextInput
+from kerberos.ui.widgets import POINTER, Menu, Notice, Stack, TextInput
 
 if TYPE_CHECKING:
     from kerberos.app import App, Session
@@ -126,9 +127,9 @@ def token_help(write: bool) -> list[RenderableType]:
     ]
 
 
-def save_token(app: App, token: str, write: bool) -> None:
+def save_token(app: App, token: str, write: bool, uuid: Optional[str] = None) -> None:
     if app.env.state is not None:
-        app.env.state.write_panel_token(token, write)
+        app.env.state.write_panel_token(token, write, uuid)
 
 
 def settle_token(app: App, client: Any) -> None:
@@ -138,7 +139,7 @@ def settle_token(app: App, client: Any) -> None:
     if state is None or not getattr(client, "token_source", ""):
         return
     if getattr(client, "refused", False):
-        state.panel_token.unlink(missing_ok=True)
+        state.forget_panel_token()
     elif getattr(client, "wrote", False):
         state.mark_panel_token_writable()
 
@@ -147,7 +148,7 @@ def ask_keep(app: App, location: PanelLocation) -> Optional[str]:
     """«keep» or «new» for a saved token given for «Проверка» when a run changes the
     panel (§7.3); None: Esc."""
     menu = Menu([("keep", t("panel.token.keep"), t("panel.token.keep.hint")),
-                 ("new", t("panel.token.new"), "")])  # fmt: skip
+                 ("new", t("panel.token.new"), t("panel.token.new.hint"))])  # fmt: skip
 
     def handle(key: str) -> Optional[str]:
         return "back" if key == "esc" else menu.handle(key)
@@ -170,23 +171,145 @@ def ensure_write_token(app: App, session: Any) -> bool:
         return False
     if choice == "keep":
         return True
-    return token_form(app, session.panel, session.location, True)
+    return credentials(app, session.panel, session.location, True)
+
+
+def credentials(
+    app: App, client: PanelClient, location: PanelLocation, write: bool,
+    error: Optional[str] = None,
+) -> bool:  # fmt: skip
+    """§7.3, steps 3 and 4: the admin's login and password, or the person's own token when
+    the panel takes no password (K30). False: the person went back."""
+    if not getattr(client, "password_login", True):
+        return token_form(app, client, location, write, error, t("panel.admin.disabled"))
+    return admin_form(app, client, location, write, error)
+
+
+def admin_form(
+    app: App, client: PanelClient, location: PanelLocation, write: bool,
+    error: Optional[str] = None,
+) -> bool:  # fmt: skip
+    """§7.3, step 3 (K30): login and password; Tab, ↑↓ and Enter go from one field to the
+    next, and the row under them opens the form for a token of the person's own. The
+    password is cleared as soon as it went out. False: the person went back."""
+    login = TextInput(t("panel.admin.login"))
+    password = TextInput(t("panel.password"), secret=True)
+    fields = [login, password]
+    row = len(fields)  # the third stop of Tab: «У меня есть API-токен»
+    state: dict[str, Any] = {"focus": 0, "error": error}
+
+    def body(_w: int, _h: int) -> RenderableType:
+        for i, item in enumerate(fields):
+            item.focused = i == state["focus"]
+        parts: list[RenderableType] = [Text(t("panel.admin.hint")), Text("")]
+        for item in fields:
+            parts += [item, Text("")]
+        if state["error"]:
+            # Under the fields, where the person looks; the note was read before (80×24).
+            parts += [Notice("error", state["error"]), Text("")]
+        current = state["focus"] == row
+        line = Text(POINTER + " " if current else "  ", style="accent")
+        line.append(t("panel.admin.token_instead"), style="accent" if current else "")
+        parts.append(line)
+        if not state["error"]:
+            parts += [Text(""), Text(t("panel.admin.note"), style="muted")]
+        return Stack(Group(*found_lines(app, location), Text("")), Group(*parts), flex=0)
+
+    def handle(key: str) -> Optional[str]:
+        if key == "esc":
+            return "back"
+        if key in ("tab", "down"):
+            state["focus"] = (state["focus"] + 1) % (row + 1)
+            return None
+        if key == "up":
+            state["focus"] = (state["focus"] - 1) % (row + 1)
+            return None
+        if key == "enter":
+            if state["focus"] == row:
+                return "token"
+            if not login.value.strip():
+                state["focus"] = 0
+            elif not password.value:
+                state["focus"] = 1
+            else:
+                return "submit"
+            return None
+        if state["focus"] < row:
+            fields[state["focus"]].handle(key)
+            state["error"] = None
+        return None
+
+    while True:
+        choice = app.interact(t("s2.title"), body, keys_form(), handle, typing=True)
+        if choice == "back":
+            password.clear()
+            return False
+        if choice == "token":
+            password.clear()
+            if token_form(app, client, location, write):
+                return True
+            state["focus"] = 0  # Esc in the token form: back to the login (§6 S2)
+            continue
+        name, secret = login.value.strip(), password.value
+        password.clear()
+        outcome = admin_sign_in(app, client, location, name, secret)
+        secret = ""
+        if outcome is True:
+            return True
+        if outcome is None:
+            return False  # the panel did not answer and the person gave up
+        state["error"], state["focus"] = outcome, 1
+
+
+def admin_sign_in(app: App, client: PanelClient, location: PanelLocation, name: str,
+                  secret: str) -> Any:  # fmt: skip
+    """True: KERBEROS has its own API token now; a text: why not; None: no answer and the
+    person gave up. The new token is saved with its uuid at once, before it is tried:
+    a token the panel then refuses is forgotten, its uuid stays for the next login (K30)."""
+    state = app.env.state
+    previous = state.panel_token_uuid() if state is not None else None
+    while True:
+        app.draw(t("s2.title"), Text(t("panel.admin.signing_in")))
+        try:
+            token, uuid = client.make_token(name, secret, previous)
+            break
+        except PanelError as exc:
+            if exc.operation == "POST /auth/login" and exc.code in ("forbidden", "unauthorized"):
+                return t("panel.err.admin_login")
+            if exc.code in ("forbidden", "unauthorized", "bad_request", "bad_response"):
+                return t("panel.err.token_create", detail=exc.detail or exc.operation)
+            if not app.ask_retry(t("s2.title"), error_text(exc, location.api, location.kind)):
+                return None
+    save_token(app, token, True, uuid)
+    outcome = try_token(app, client, location, token)
+    if outcome is True:
+        client.token_source = "made"
+        return True
+    if state is not None:
+        state.forget_panel_token()
+    return outcome  # why the panel refused the token it has just made, or None
 
 
 def token_form(
     app: App, client: PanelClient, location: PanelLocation, write: bool,
-    error: Optional[str] = None,
+    error: Optional[str] = None, note: Optional[str] = None,
 ) -> bool:  # fmt: skip
-    """§7.3, step 3: a token typed in, kept once GET /nodes passes. False: the person went back."""
+    """§7.3, step 4: a token typed in, kept once GET /nodes passes. False: the person went back.
+
+    `note`: why the form comes first (the panel takes no password, K30)."""
     token = TextInput(t("panel.token"), secret=True)
     state: dict[str, Any] = {"error": error}
 
     def body(_w: int, _h: int) -> RenderableType:
-        parts = found_lines(app, location) + [Text("")] + token_help(write) + [token]
-        parts += [Text(""), Text(t("panel.token_saved_note"), style="muted")]
+        parts: list[RenderableType] = [Text(note, style="bold"), Text("")] if note else []
+        parts += token_help(write) + [token, Text("")]
+        # The error takes the place of the note under the field; in a low terminal the
+        # lines of where the panel is give way first (80×24, §14.2).
         if state["error"]:
-            parts += [Text(""), Notice("error", state["error"])]
-        return Group(*parts)
+            parts.append(Notice("error", state["error"]))
+        else:
+            parts.append(Text(t("panel.token_saved_note"), style="muted"))
+        return Stack(Group(*found_lines(app, location), Text("")), Group(*parts), flex=0)
 
     def handle(key: str) -> Optional[str]:
         if key == "esc":
@@ -238,9 +361,10 @@ def try_token(app: App, client: PanelClient, location: PanelLocation, value: str
 
 
 def sign_in(app: App, client: PanelClient, location: PanelLocation, write: bool) -> bool:
-    """§7.3, step 2: the saved token, if the panel still takes it; else one typed in.
+    """§7.3, step 2: the saved token, if the panel still takes it; else KERBEROS makes
+    its own with the admin's login and password, or the person pastes one (K30).
 
-    A run that changes the panel asks first about a token given for «Проверка».
+    A run that changes the panel asks first about a token pasted for «Проверка».
     """
     state = app.env.state
     saved = state.read_panel_token() if state is not None else None
@@ -265,7 +389,7 @@ def sign_in(app: App, client: PanelClient, location: PanelLocation, write: bool)
                 break
             if not app.ask_retry(t("s2.title"), error_text(exc, location.api, location.kind)):
                 return False
-    return token_form(app, client, location, write, error)
+    return credentials(app, client, location, write, error)
 
 
 def load(
@@ -280,7 +404,7 @@ def load(
                 # A right GET /nodes could not show is missing: another token, then again.
                 client.forget_token()
                 text = forbidden_text(exc) if exc.code == "forbidden" else t("panel.err.token")
-                if not token_form(app, client, location, write, text):
+                if not credentials(app, client, location, write, text):
                     return None
                 continue
             if not app.ask_retry(t("s2.title"), error_text(exc, location.api, location.kind)):
@@ -554,8 +678,11 @@ def panel_line(app: App, session: Session) -> list[RenderableType]:
                     style="ok")  # fmt: skip
         name = "Remnawave"
     extra = [name + ("" if location.version == "?" else f" {location.version}")]
-    if getattr(session.panel, "token_source", "") == "saved":
+    source = getattr(session.panel, "token_source", "")
+    if source == "saved":
         extra.append(t("panel.token.used"))
+    elif source == "made":
+        extra.append(t("panel.token.made"))
     line.append(" · " + " · ".join(extra), style="muted")
     return [line]
 

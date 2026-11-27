@@ -1,6 +1,6 @@
 """S2 panel and S3 nodes: key scenarios (tech.md §6, §7, K1)."""
 
-from helpers import TOKEN, assert_snapshot, flat, login_keys, make_app, typed
+from helpers import TOKEN, assert_snapshot, flat, login_keys, make_app, token_keys, typed
 
 from kerberos.copy import t
 from kerberos.demo.fleet import build_panel
@@ -28,7 +28,7 @@ def test_s2_connects_without_typing_an_address():
 
 
 def test_s2_wrong_token_then_right_one():
-    keys = typed("nope") + ["enter"] + login_keys() + ["esc", "esc", "esc"]
+    keys = token_keys("nope") + typed(TOKEN) + ["enter", "esc", "esc", "esc"]
     app, term = make_app(keys, panel=strict_panel())
     app.run("check")
     assert any(t("panel.err.token") in f for f in term.frames)
@@ -53,16 +53,6 @@ def test_the_token_never_reaches_the_screen_and_is_kept_0600():
             assert token not in path.read_text(encoding="utf-8", errors="replace"), path
 
 
-def test_kerberos_never_signs_in_with_the_admin_password():
-    """§7.3: the panel refuses its admin login token to programs; only API tokens work."""
-    panel = strict_panel()
-    keys = login_keys() + ["enter", "esc", "q", "enter"]
-    app, term = make_app(keys, panel=panel)
-    app.run("check")
-    assert not any(path == "/auth/login" for _method, path, _body in panel.log)
-    assert any(t("panel.token_hint") in flat(f) for f in term.frames)
-
-
 def test_a_saved_token_is_not_asked_for_again():
     panel = strict_panel()
     app, _ = make_app(login_keys() + ["esc", "esc", "esc"], panel=panel)
@@ -77,12 +67,12 @@ def test_a_saved_token_is_not_asked_for_again():
 
 def test_a_saved_token_the_panel_dropped_is_replaced():
     panel = strict_panel()
-    app, _ = make_app(login_keys() + ["esc", "esc", "esc"], panel=panel)
+    app, _ = make_app(token_keys() + ["esc", "esc", "esc"], panel=panel)
     app.run("check")
     state = app.env.state
     del panel.api_tokens[TOKEN]  # deleted in the panel
     fresh = panel.add_api_token("rw-fresh-token")
-    app, term = make_app(typed(fresh) + ["enter", "esc", "esc", "esc"], panel=panel, state=state)
+    app, term = make_app(token_keys(fresh) + ["esc", "esc", "esc"], panel=panel, state=state)
     app.run("check")
     assert any(t("panel.token.stale") in flat(f) for f in term.frames)
     assert any(t("panel.ok", nodes=6, hosts=10) in f for f in term.frames)
@@ -94,11 +84,12 @@ def test_rights_to_give_follow_the_mode():
 
     from kerberos.panel.client import SCOPES_CHECK, SCOPES_FIX
 
-    app, term = make_app(["esc", "esc"], panel=strict_panel())
+    to_token = ["tab", "tab", "enter", "esc", "esc", "esc"]  # «У меня есть API-токен» (K30)
+    app, term = make_app(to_token, panel=strict_panel())
     app.run("check")
     assert any(json.dumps(SCOPES_CHECK).replace(" ", "") in flat(f).replace(" ", "")
                for f in term.frames)  # fmt: skip
-    app, term = make_app(["esc", "esc"], panel=strict_panel())
+    app, term = make_app(to_token, panel=strict_panel())
     app.run("fix")
     assert any(json.dumps(SCOPES_FIX).replace(" ", "") in flat(f).replace(" ", "")
                for f in term.frames)  # fmt: skip
@@ -108,7 +99,7 @@ def test_rights_to_give_follow_the_mode():
 def test_a_token_without_a_right_is_told_which_and_another_one_goes_on():
     panel = strict_panel()
     reader = panel.add_api_token("rw-nodes-only", scopes=("nodes:read",))
-    keys = typed(reader) + ["enter"] + login_keys() + ["esc", "esc", "esc"]
+    keys = token_keys(reader) + token_keys() + ["esc", "esc", "esc"]
     app, term = make_app(keys, panel=panel)
     app.run("check")
     wanted = t("panel.err.forbidden", kind=t("panel.right.read"),

@@ -8,6 +8,7 @@ PanelError("bad_response") and the run stops before any change.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Optional
 
 from kerberos.panel.errors import PanelError
@@ -26,6 +27,11 @@ HOST_SHAPES = {
     "tags": ("tags", "xhttpExtraParams"),
     "tag": ("tag", "xHttpExtraParams"),
 }
+
+
+# An API token is a JWT: base64url parts and dots (§7.3).
+TOKEN_RE = re.compile(r"[A-Za-z0-9._~+/=-]+")
+UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
 def bad(what: str) -> PanelError:
@@ -84,6 +90,25 @@ def _obj(value: Any, what: str) -> dict:
     if not isinstance(value, dict):
         raise bad(f"{what} is not an object")
     return value
+
+
+def access_token(raw: Any) -> str:
+    """`POST /auth/login`: the admin login token (§7.4, K30)."""
+    token = _str(_obj(raw, "login"), "accessToken")
+    if not TOKEN_RE.fullmatch(token):
+        raise bad("accessToken is not a token")
+    return token
+
+
+def api_token(raw: Any) -> tuple[str, str]:
+    """`POST /tokens`: (token, uuid) of the API token KERBEROS made (§7.4, K30)."""
+    obj = _obj(raw, "api token")
+    token, uuid = _str(obj, "token"), _str(obj, "uuid")
+    if not TOKEN_RE.fullmatch(token):
+        raise bad("token is not a token")
+    if not UUID_RE.fullmatch(uuid):
+        raise bad("uuid is not a uuid")
+    return token, uuid
 
 
 def node(raw: Any) -> Node:

@@ -10,7 +10,7 @@ import json
 import stat
 
 import pytest
-from helpers import S4_KEYS, TOKEN, flat, login_keys, make_app, seen, typed
+from helpers import S4_KEYS, flat, login_keys, make_app, seen, typed
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -73,11 +73,11 @@ def test_two_panels_on_the_server_are_asked_about():
     assert seen(term, t("panel.choose"))
 
 
-def test_esc_on_the_token_opens_the_choice_it_skipped():
+def test_esc_on_the_login_opens_the_choice_it_skipped():
     app, term = one_panel_app(["esc", "esc"])
     app.run("check")
-    token = next(i for i, f in enumerate(term.frames) if t("panel.token") in flat(f))
-    assert any(t("panel.choose") in flat(f) for f in term.frames[token:])
+    login = next(i for i, f in enumerate(term.frames) if t("panel.admin.login") in flat(f))
+    assert any(t("panel.choose") in flat(f) for f in term.frames[login:])
 
 
 def test_s2_goes_straight_on_to_s3_and_esc_there_leaves():
@@ -317,13 +317,17 @@ def reaches_the_plan(keys, state=None, nodes=None):
     return term.frames[-1].splitlines()[0].startswith("/// kerberos  " + t("plan.title"))
 
 
-def test_the_first_run_takes_10_keys_and_a_later_one_4():
-    token = typed(TOKEN)
-    first = ["enter", "enter"] + S4_KEYS + ADMIN + ["enter", "enter", "enter"]
-    assert len(first) == 10, "was 15 before K25 (§21)"
-    assert reaches_the_plan(token + first)
+def test_the_first_run_takes_11_keys_and_a_later_one_4():
+    # Typed: the admin's login and password (K30), not counted. The keys: Tab to the
+    # password, Enter, then S3 to S7. One key more than a pasted token took (10 after
+    # K25), and no trip to the browser to make that token.
+    login, password = typed("admin"), typed("admin-password")
+    first = ["tab", "enter", "enter"] + S4_KEYS + ADMIN + ["enter", "enter", "enter"]
+    assert len(first) == 11, "was 15 before K25 and 10 with a token from the browser (§21)"
+    typing = login + first[:1] + password + first[1:]
+    assert reaches_the_plan(typing)
     nodes = build_nodes()
-    app, _term = one_panel_app(token + first + ["esc", "q", "enter"], nodes=nodes)
+    app, _term = one_panel_app(typing + ["esc", "q", "enter"], nodes=nodes)
     app.run("fix")
     assert len(AGAIN_TO_PLAN) == 4, "was 9 before K25 (§21)"
     assert reaches_the_plan(AGAIN_TO_PLAN, state=app.env.state, nodes=nodes)

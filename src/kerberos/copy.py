@@ -17,6 +17,24 @@ TEXT: dict[str, str] = {
     "panel.found": "Нашёл Remnawave {version} на этом сервере",
     "panel.password": "Пароль (не сохраняется)",
     "panel.token": "API-токен панели",
+    # K30: KERBEROS makes its own API token with the admin's login and password
+    "panel.admin.hint": (
+        "Войдите как администратор панели: KERBEROS создаст себе API-токен и забудет пароль."
+    ),
+    "panel.admin.login": "Логин администратора панели",
+    "panel.admin.token_instead": "У меня есть API-токен: вставить его",
+    "panel.admin.disabled": "В панели выключен вход по паролю: вставьте API-токен.",
+    "panel.admin.note": (
+        "KERBEROS сохранит токен на этом сервере, читать его может только root. "
+        "Вход появится в уведомлениях панели, как вход из браузера."
+    ),
+    "panel.admin.signing_in": "Вхожу в панель и создаю API-токен…",
+    "panel.err.admin_login": "Логин или пароль не подходят.",
+    "panel.err.token_create": (
+        "Панель не дала создать API-токен: {detail}. Создайте токен в панели и вставьте его: "
+        "«У меня есть API-токен»."
+    ),
+    "panel.token.made": "API-токен создан",
     "panel.ok": "Панель подключена: нод {nodes}, хостов {hosts}",
     "nodes.title": "Какие ноды защищать?",
     "access.password": "Введите пароль root для {node}. KERBEROS его не видит и не сохраняет",
@@ -254,7 +272,7 @@ TEXT: dict[str, str] = {
         "KERBEROS сохранит токен на этом сервере, читать его может только root. "
         "В следующий раз вводить его не придётся."
     ),
-    "panel.token.stale": "Сохранённый токен панель больше не принимает: введите новый.",
+    "panel.token.stale": "Сохранённый токен панель больше не принимает.",
     "panel.token.used": "Вход по сохранённому API-токену",
     "panel.token.readonly": (
         "Сохранённый токен вводили для «Проверки». Чтобы что-то изменить в панели, "
@@ -262,7 +280,8 @@ TEXT: dict[str, str] = {
     ),
     "panel.token.keep": "Оставить сохранённый токен",
     "panel.token.keep.hint": "у него «Полный доступ» или права на запись",
-    "panel.token.new": "Ввести другой токен",
+    "panel.token.new": "Войти заново",
+    "panel.token.new.hint": "логином и паролем администратора или другим токеном",
     "panel.connecting": "Подключаюсь к панели…",
     "panel.loading": "Читаю ноды, хосты и профили…",
     "panel.err.token": "Токен не подходит",

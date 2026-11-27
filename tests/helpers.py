@@ -64,9 +64,16 @@ TOKEN = "rw-test-token"  # the demo panel takes any API token (§7.3)
 S4_KEYS = ["esc", "enter", "enter"]
 
 
-def login_keys(token: str = TOKEN) -> list[str]:
-    """S2 with no saved token: the API token typed in, then Enter."""
-    return typed(token) + ["enter"]
+def login_keys(name: str = "admin", password: str = "admin-password") -> list[str]:
+    """S2 with no saved token (K30): the admin's login, Tab, the password, Enter; KERBEROS
+    makes its own API token. The defaults are the admin of the fake panel."""
+    return typed(name) + ["tab"] + typed(password) + ["enter"]
+
+
+def token_keys(token: str = TOKEN) -> list[str]:
+    """S2 with no saved token, a token of the person's own: Tab twice to «У меня есть
+    API-токен» under the login, Enter, the token, Enter (K30)."""
+    return ["tab", "tab", "enter"] + typed(token) + ["enter"]
 
 
 def make_app(

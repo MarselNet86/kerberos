@@ -9,7 +9,18 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from helpers import S4_KEYS, flat, login_keys, make_app, on, on_group, plan_index, seen, typed
+from helpers import (
+    S4_KEYS,
+    flat,
+    login_keys,
+    make_app,
+    on,
+    on_group,
+    plan_index,
+    seen,
+    token_keys,
+    typed,
+)
 from hypothesis import given
 from hypothesis import strategies as st
 from rich.console import Group
@@ -355,9 +366,12 @@ def test_esc_on_s6_neither_collects_nor_asks_whois_again():
 
 
 def test_f_on_s6_goes_on_to_the_plan_on_the_same_data():
-    # The token of the check (keep it), the admin key, plan, consent, S9.
+    # A token pasted for the check (one KERBEROS made is not asked about, K30): keep it,
+    # the admin key, plan, consent, S9.
     keys = ["f", "enter", "enter", "enter", "enter", "enter", "enter"]
-    app, term, code = check_app(keys, width=100, height=30)
+    start = token_keys() + TO_S6_CHECK[len(login_keys()) :]
+    app, term = make_app(start + keys, width=100, height=30, state=short_state())
+    code = app.run("check")
     assert code == EXIT_OK
     runs = RunStore(app.env.state, app.env.clock).runs()
     fix, check = runs[0], runs[1]

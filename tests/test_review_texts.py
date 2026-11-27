@@ -143,7 +143,8 @@ def test_changed_host_key_is_skipped_by_default_and_shows_the_old_key():
     state = app.env.state
     nodes[0].host_key = PublicKey("ssh-ed25519", demo_blob("reinstalled"))
     # Esc on the port of kz-1, the intro, Enter on the changed key of nl-1.
-    app, term = run_check(nodes, state, extra=["esc"] + INTRO + ["enter"])
+    same = app.env.panel_transport  # the token of the first run lives in this panel (K30)
+    app, term = run_check(nodes, state, panel=same, extra=["esc"] + INTRO + ["enter"])
     assert state.pinned("203.0.113.10", 22) == demo_blob("hoster-image")
     asked = first(term, t("access.hostkey_old", fingerprint=SHARED))
     assert asked is not None
