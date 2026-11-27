@@ -14,6 +14,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
+from kerberos.fixes.xui_routing import routing_info
 from kerberos.host import Host
 
 IMAGE = "remnawave/backend"
@@ -122,6 +123,11 @@ XUI_KEYS = (
     "subPort",
     "subPath",
     "twoFactorEnable",
+    # K29: the routing the subscription hands out; no secrets among them.
+    "subEnableRouting",
+    "subRoutingRules",
+    "subJsonEnable",
+    "subJsonRules",
 )
 
 
@@ -169,6 +175,7 @@ def discover_xui(host: Host) -> Optional[PanelLocation]:
         "db": f"{folder}/x-ui.db" if folder else XUI_DB,
         "dbFolder": folder,
         "envPort": bool(env.get("XUI_PORT")),
+        "routing": routing_info(version, settings),
     }
     return PanelLocation(
         api=f"{'https' if tls else 'http'}://{address}:{port}{path}",
