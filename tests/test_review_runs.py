@@ -27,7 +27,7 @@ def store_of(app):
 # -- app 16 (v19): the timer signs in with the saved API token; KERBEROS makes no token ------
 def test_failed_timer_is_not_reported_and_no_token_is_made():
     panel, nodes = fleet()
-    app, _term, _code = fix(domain_keys(NL1, "nl-1.example.com") + ["f"] + APPLY + DONE,
+    app, _term, _code = fix(domain_keys(NL1, "nl-1.example.com") + APPLY + DONE,
                             panel, nodes)  # fmt: skip
     run = fix_run(app)
     assert any(c[:1] == ("systemd-run",) for c in app.env.host.calls)  # the demo host has none
@@ -40,7 +40,7 @@ def test_timer_of_a_rolled_back_run_finds_nothing_to_do():
     panel, nodes = fleet()
     host = build_host()
     host.on(["systemd-run"], CommandResult(0))
-    keys = TO_PLAN + domain_keys(NL1, "nl-1.example.com") + ["f"] + APPLY + DONE
+    keys = TO_PLAN + domain_keys(NL1, "nl-1.example.com") + APPLY + DONE
     app, _term = make_app(keys, panel=panel, nodes=list(nodes.values()), height=46, host=host)
     app.run("fix")
     run = fix_run(app)

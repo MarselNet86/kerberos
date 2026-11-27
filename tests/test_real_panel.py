@@ -317,7 +317,7 @@ def test_rollback_after_a_normalized_finalization_does_not_ask():
     panel.normalize_profile = normalized
     host = build_host()
     host.on(["systemd-run"], CommandResult(0))
-    keys = TO_PLAN + domain_keys(NL1_SELF_STEAL, "nl-1.example.com") + ["f"] + APPLY
+    keys = TO_PLAN + domain_keys(NL1_SELF_STEAL, "nl-1.example.com") + APPLY
     app, term = make_app(keys, panel=panel, nodes=list(nodes.values()), height=46, host=host)
     assert app.run("fix") == EXIT_OK
     store = store_of(app)

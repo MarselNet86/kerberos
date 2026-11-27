@@ -2,7 +2,7 @@
 
 import random
 
-from helpers import login_keys, make_app, on, seen
+from helpers import S4_KEYS, login_keys, make_app, on, seen
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -12,8 +12,8 @@ from kerberos.fixes import xhttp
 from kerberos.fixes.journal import RunStore
 from kerberos.flow import EXIT_OK, EXIT_PARTIAL
 
-TO_PLAN = login_keys() + ["enter", "enter"] + ["enter"] * 5 + ["esc"] + ["enter", "enter"]
-TO_PLAN += ["enter", "enter", "enter"]
+TO_PLAN = login_keys() + ["enter"] + S4_KEYS + ["enter", "enter"]  # S3, S4, admin key
+TO_PLAN += ["enter", "enter", "enter"]  # S4 summary, whois, S6 → S7
 APPLY = ["enter", "enter", "enter"]  # S7 → consent → accept → S9 Enter
 ROLLBACK = ["enter", "enter", "enter", "x"]  # the panel: the token saved by the fix run
 CONFIRM_EDGES = on("fi-1", "cdn.edge_only", "e", "enter")  # the nets, all marked, confirmed

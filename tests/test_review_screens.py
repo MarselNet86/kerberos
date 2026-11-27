@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from helpers import flat, login_keys, make_app, on, on_group, plan_index, seen, typed
+from helpers import S4_KEYS, flat, login_keys, make_app, on, on_group, plan_index, seen, typed
 from hypothesis import given
 from hypothesis import strategies as st
 from rich.console import Group
@@ -38,16 +38,16 @@ from kerberos.ui.widgets import (
     fit_widths,
 )
 
-# S2 login, S3, S4: five host keys (de-1 also installs python3), kz-1 skipped.
-TO_S4_END = login_keys() + ["enter", "enter"] + ["enter"] * 5 + ["esc"]
-# «Проверка» opens S4 with what it installs (one more Enter), then the same keys.
-CHECK_S4_END = login_keys() + ["enter", "enter", "enter"] + ["enter"] * 5 + ["esc"]
+# S2 login, S3, S4: kz-1 skipped, one table of host keys, de-1 also installs python3 (K25).
+TO_S4_END = login_keys() + ["enter"] + S4_KEYS
+# «Проверка» says what S4 installs over the same table: the same keys.
+CHECK_S4_END = login_keys() + ["enter"] + S4_KEYS
 TO_S6_CHECK = CHECK_S4_END + ["enter", "enter"]  # S4 summary, whois yes
 # «Исправление»: the admin key («Мои ключи» and its list), S4 summary, whois, S6 → S7.
 TO_PLAN = TO_S4_END + ["enter", "enter"] + ["enter", "enter", "enter"]
 LAUNCHER = "/opt/kerberos/kerberos"
 XUI_TO_PLAN = ["down", "enter"] + typed("admin") + ["enter"] + typed("pw") + ["enter"]
-XUI_TO_PLAN += ["enter", "enter", "enter"]  # S2 summary, S4 summary, S6 → S7
+XUI_TO_PLAN += ["enter", "enter"]  # S4 summary, S6 → S7
 XUI_STEAL = ["end"]  # the own domain of the server: the last row of S7 (K23)
 
 
@@ -169,7 +169,7 @@ def test_s9_counts_what_did_not_apply():
 def test_finalize_is_automatic_on_s9_only_with_a_timer():
     # The demo panel server has no systemd-run: the timer is not set (§10.4 step 6).
     keys = on("nl-1", "self_steal", "d", *"nl-1.example.com")
-    app, term, code = run_fix(keys + ["enter", "f", "enter", "enter", "enter"], height=30)
+    app, term, code = run_fix(keys + ["enter", "enter", "enter", "enter"], height=30)
     assert code == EXIT_OK
     run = last_run(app)
     assert run["pending"] and run.get("finalizeTimer") is None
@@ -274,10 +274,12 @@ def test_waiting_domains_leave_the_plan_its_rows():
 
 def test_finalize_line_shows_only_with_a_marked_own_domain():
     app, term, _code = run_fix(["esc", "q", "enter"], width=100, height=30)
-    assert not seen(term, t("plan.finalize.manual"))
+    assert not seen(term, t("plan.finalize.auto")) and not seen(term, t("plan.finalize.manual"))
     keys = on("nl-1", "self_steal", "d", *"nl-1.example.com")
-    app, term, _code = run_fix(keys + ["enter", "esc", "q", "enter"], width=100, height=30)
-    assert flat(t("plan.finalize.manual")) in flat(titled(term, "plan.title")[-1])
+    app, term, _code = run_fix(keys + ["enter", "f", "esc", "q", "enter"], width=100, height=30)
+    plan = titled(term, "plan.title")
+    assert flat(t("plan.finalize.auto")) in flat(plan[-2]), "automatic by default (K25)"
+    assert flat(t("plan.finalize.manual")) in flat(plan[-1]), "f: by hand"
 
 
 # -- UX 5, 17: 3x-ui ------------------------------------------------------------------

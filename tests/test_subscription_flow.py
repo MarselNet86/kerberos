@@ -1,6 +1,6 @@
 """Subscription templates, ping-type, fingerprint and reserves (tech.md §10.5, §10.9, K7)."""
 
-from helpers import login_keys, make_app, on, seen
+from helpers import S4_KEYS, login_keys, make_app, on, seen
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -12,8 +12,8 @@ from kerberos.fixes.journal import RunStore
 from kerberos.fixes.profile import remaining
 from kerberos.flow import EXIT_OK
 
-TO_PLAN = login_keys() + ["enter", "enter"] + ["enter"] * 5 + ["esc"] + ["enter", "enter"]
-TO_PLAN += ["enter", "enter", "enter"]
+TO_PLAN = login_keys() + ["enter"] + S4_KEYS + ["enter", "enter"]  # S3, S4, admin key
+TO_PLAN += ["enter", "enter", "enter"]  # S4 summary, whois, S6 → S7
 APPLY = ["enter", "enter", "enter"]
 ROLLBACK = ["enter", "enter", "enter", "x"]  # the panel: the token saved by the fix run
 NL1, NL2 = "nl-1", "nl-2"  # rows of the block «Свой домен» of S7 (K23)

@@ -11,7 +11,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from helpers import TOKEN, flat, login_keys, make_app, seen
+from helpers import S4_KEYS, TOKEN, flat, login_keys, make_app, seen
 
 from kerberos.copy import t
 from kerberos.demo.fleet import build_nodes, build_panel
@@ -19,11 +19,10 @@ from kerberos.nodes.transport import SshTransport, Target
 from kerberos.state import State
 
 ROOT = Path(__file__).resolve().parent.parent
-TO_S4 = login_keys() + ["enter", "enter"]
-INTRO = ["enter"]
-# nl-1 confirms its host key and is turned away at once; nl-2, de-1 (python), fi-1
-# confirm theirs; kz-1 is unreachable and its port question is skipped.
-ALL_NODES = ["enter", "enter", "enter", "enter", "enter", "esc"]
+TO_S4 = login_keys() + ["enter"]  # S2 does not stop (K25), S3
+# kz-1 is unreachable and its port question is skipped; one table confirms the host keys
+# (nl-1 is turned away at once after it), de-1 gets python3.
+ALL_NODES = S4_KEYS
 WHOIS = ["enter"]  # S5: yes; then S6
 QUIT = ["q", "enter"]
 KEY_ONLY = t("access.reason.key_only")
@@ -37,7 +36,7 @@ def strict_panel():
 
 
 def run_check(nodes, *, forwarded=False):
-    keys = TO_S4 + INTRO + ALL_NODES + ["enter"] + WHOIS + QUIT
+    keys = TO_S4 + ALL_NODES + ["enter"] + WHOIS + QUIT
     app, term = make_app(keys, nodes=nodes, panel=strict_panel())
     app.env.transport.agent_forwarded = forwarded
     app.run("check")

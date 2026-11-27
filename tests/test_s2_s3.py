@@ -19,7 +19,7 @@ def strict_panel(**kwargs) -> FakePanel:
 
 
 def test_s2_connects_without_typing_an_address():
-    keys = ["enter"] + login_keys() + ["enter", "enter", "x", "q", "enter"]
+    keys = ["enter"] + login_keys() + ["enter", "esc", "q", "enter"]
     app, term = make_app(keys, panel=strict_panel())
     assert app.run("check") == 0
     assert any(t("panel.found", version="2.8.1") in f for f in term.frames)
@@ -56,7 +56,7 @@ def test_the_token_never_reaches_the_screen_and_is_kept_0600():
 def test_kerberos_never_signs_in_with_the_admin_password():
     """§7.3: the panel refuses its admin login token to programs; only API tokens work."""
     panel = strict_panel()
-    keys = login_keys() + ["enter", "enter", "x", "q", "enter"]
+    keys = login_keys() + ["enter", "esc", "q", "enter"]
     app, term = make_app(keys, panel=panel)
     app.run("check")
     assert not any(path == "/auth/login" for _method, path, _body in panel.log)
@@ -160,7 +160,7 @@ def test_forbidden_while_reading_is_shown_with_the_operation():
 
 
 def test_s3_snapshot_and_disabled_node():
-    keys = login_keys() + ["enter", "down", "down", "down", "down", "space", "esc", "esc", "esc"]
+    keys = login_keys() + ["down", "down", "down", "down", "space", "esc", "esc", "esc"]
     app, term = make_app(keys, panel=strict_panel(), height=24)
     app.run("check")
     s3 = next(f for f in term.frames if t("nodes.title") in f)
@@ -170,7 +170,7 @@ def test_s3_snapshot_and_disabled_node():
 
 
 def test_s3_needs_at_least_one_node():
-    keys = login_keys() + ["enter", "a", "enter", "a", "enter", "x", "q", "enter"]
+    keys = login_keys() + ["a", "enter", "a", "enter", "esc", "q", "enter"]
     app, term = make_app(keys, panel=strict_panel())
     app.run("check")
     assert any(t("nodes.need_one") in f for f in term.frames)
@@ -179,14 +179,14 @@ def test_s3_needs_at_least_one_node():
 
 def test_check_mode_makes_no_changes_in_the_panel():
     panel = strict_panel()
-    keys = login_keys() + ["enter", "enter", "x", "q", "enter"]
+    keys = login_keys() + ["enter", "esc", "q", "enter"]
     app, _ = make_app(keys, panel=panel)
     app.run("check")
     assert panel.mutations == []
 
 
 def test_s3_masks_addresses():
-    keys = login_keys() + ["enter", "m", "esc", "esc", "esc"]
+    keys = login_keys() + ["m", "esc", "esc", "esc"]
     app, term = make_app(keys, panel=strict_panel())
     app.run("check")
     masked = next(f for f in term.frames if t("nodes.title") in f and t("hdr.mask") in f)

@@ -1,17 +1,18 @@
 """S4 access to the nodes (tech.md §6, §8, K2)."""
 
-from helpers import TOKEN, login_keys, make_app, seen
+from helpers import S4_KEYS, TOKEN, login_keys, make_app, seen
 
 from kerberos.copy import t
 from kerberos.demo.fleet import build_nodes, build_panel
 from kerberos.nodes import bootstrap
 from kerberos.nodes.keys import PublicKey, demo_blob
 
-TO_S4 = login_keys() + ["enter", "enter"]
-AGAIN_S4 = ["enter", "enter"]  # a later run: the saved token, S2 asks nothing (§7.3)
-INTRO = ["enter"]  # «Проверка»: S4 first says what it installs
-# nl-1, nl-2, de-1 (python: install), fi-1 confirm the host key; kz-1 is unreachable.
-ALL_NODES = ["enter", "enter", "enter", "enter", "enter", "esc"]
+TO_S4 = login_keys() + ["enter"]  # S2 does not stop (K25), S3
+AGAIN_S4 = ["enter"]  # a later run: the saved token, S2 asks nothing (§7.3); S3
+# kz-1 is unreachable (Esc on its port); one table with the intro of «Проверка» confirms
+# nl-1, nl-2, de-1 and fi-1; de-1 gets python3 after the question.
+ALL_NODES = S4_KEYS
+INTRO = ["enter"]  # «Проверка» with no new key to confirm: what S4 installs, alone
 QUIT = ["q", "enter"]
 
 
@@ -23,7 +24,8 @@ def strict_panel():
 
 
 def run_check(nodes=None, state=None, extra=ALL_NODES, panel=None):
-    keys = TO_S4 + INTRO + extra + ["enter", "x"] + QUIT
+    start = AGAIN_S4 if state is not None and state.read_panel_token() else TO_S4
+    keys = start + list(extra) + ["enter", "x"] + QUIT
     app, term = make_app(keys, nodes=nodes, state=state, panel=panel or strict_panel())
     app.run("check")
     return app, term
@@ -67,7 +69,7 @@ def test_host_key_change_stops_commands_to_the_node():
     app, _ = run_check(nodes)
     state = app.env.state
     nodes[0].host_key = PublicKey("ssh-ed25519", demo_blob("reinstalled"))
-    keys = AGAIN_S4 + INTRO + ["esc", "esc"] + ["enter", "x"] + QUIT  # skip nl-1's new key; kz-1
+    keys = AGAIN_S4 + ["esc"] + INTRO + ["esc"] + ["enter", "x"] + QUIT  # kz-1; skip nl-1's key
     app, term = make_app(keys, nodes=nodes, state=state, panel=strict_panel())
     start = len(app.env.transport.log)
     app.run("check")
@@ -83,7 +85,7 @@ def test_new_host_key_can_be_confirmed():
     state = app.env.state
     nodes[0].host_key = PublicKey("ssh-ed25519", demo_blob("reinstalled"))
     # «Пропустить ноду» is preselected for a changed key: ↑ to confirm it.
-    keys = AGAIN_S4 + INTRO + ["up", "enter", "esc"] + ["enter", "x"] + QUIT
+    keys = AGAIN_S4 + ["esc"] + INTRO + ["up", "enter"] + ["enter", "x"] + QUIT
     app, term = make_app(keys, nodes=nodes, state=state, panel=strict_panel())
     app.run("check")
     assert state.pinned("203.0.113.10", 22) == demo_blob("reinstalled")
@@ -95,7 +97,7 @@ def test_known_nodes_skip_the_bootstrap():
     app, _ = run_check(nodes)
     state = app.env.state
     app, term = make_app(
-        TO_S4 + INTRO + ["esc"] + ["enter", "x"] + QUIT,
+        AGAIN_S4 + ["esc"] + ["enter", "x"] + QUIT,
         nodes=nodes,
         state=state,
         panel=strict_panel(),
@@ -111,7 +113,7 @@ def test_bootstrap_again_duplicates_nothing():
     app, _ = run_check(nodes)
     state = app.env.state
     state.nodes_file.unlink()
-    app, _ = run_check(nodes, state, extra=ALL_NODES[:4] + ["esc"])
+    app, _ = run_check(nodes, state, extra=["esc"] + INTRO)  # the keys are pinned already
     for node in nodes[:4]:
         assert len(kerberos_lines(node)) == 1, node.name
 
@@ -120,7 +122,7 @@ def test_old_agent_is_updated():
     nodes = build_nodes()
     app, _ = run_check(nodes)
     nodes[0].agent_sha = "0" * 64
-    app, _ = run_check(nodes, app.env.state, extra=["esc"])
+    app, _ = run_check(nodes, app.env.state, extra=["esc"])  # kz-1
     assert nodes[0].agent_sha == bootstrap.agent_sha256()
     assert any(
         cmd.startswith("update ") for addr, cmd in app.env.transport.log if addr == "203.0.113.10"
@@ -131,14 +133,14 @@ def test_new_panel_address_sets_access_up_again():
     nodes = build_nodes()
     app, _ = run_check(nodes)
     nodes[0].panel_ip = "198.51.100.6"
-    app, _ = run_check(nodes, app.env.state, extra=["esc"])
+    app, _ = run_check(nodes, app.env.state, extra=["esc"] + INTRO)  # kz-1; set nl-1 up again
     lines = kerberos_lines(nodes[0])
     assert len(lines) == 1 and lines[0].startswith('from="198.51.100.6"')
 
 
 def test_python_install_can_be_declined():
     nodes = build_nodes()
-    extra = ["enter", "enter", "enter", "down", "enter", "enter", "esc"]
+    extra = ["esc", "enter", "down", "enter"]  # kz-1, the table, de-1: «Пропустить ноду»
     app, term = run_check(nodes, extra=extra)
     assert nodes[2].python is False and nodes[2].agent_sha is None
     summary = next(f for f in term.frames if t("access.summary", ok=3, total=5) in f)
@@ -149,7 +151,7 @@ def test_other_ssh_port_is_asked_for():
     nodes = build_nodes()
     nodes[5].reachable = True
     nodes[5].ssh_port = 2222
-    extra = ["enter"] * 5 + ["backspace", "backspace"] + list("2222") + ["enter", "enter"]
+    extra = ["backspace", "backspace"] + list("2222") + ["enter", "enter", "enter"]
     app, term = run_check(nodes, extra=extra)
     record = app.env.state.find_node("kz-1")
     assert record.access == "ok" and record.ssh_port == 2222
@@ -163,4 +165,4 @@ def test_admin_key_question_only_in_fix_mode():
     app, term = make_app(keys)
     app.run("fix")
     assert any(t("access.admin.title") in f for f in term.frames)
-    assert any(t("access.admin.chosen.mine") in f for f in term.frames)
+    assert seen(term, t("access.answer.admin.mine", n=1))

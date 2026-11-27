@@ -5,14 +5,14 @@ is a row a group of measures with a mark for the whole group, opened by node wit
 the own domains a row a node; consent and S9 say what changes by area.
 """
 
-from helpers import flat, login_keys, make_app, on, on_group, seen
+from helpers import S4_KEYS, flat, login_keys, make_app, on, on_group, seen
 
 from kerberos.copy import t
 from kerberos.demo.fleet import build_nodes
 from kerberos.flow import EXIT_OK
 
-TO_PLAN = login_keys() + ["enter", "enter"] + ["enter"] * 5 + ["esc"] + ["enter", "enter"]
-TO_PLAN += ["enter", "enter", "enter"]
+TO_PLAN = login_keys() + ["enter"] + S4_KEYS + ["enter", "enter"]  # S3, S4, admin key
+TO_PLAN += ["enter", "enter", "enter"]  # S4 summary, whois, S6 → S7
 OUT = ["esc", "q", "enter"]  # S7 → S6 → quit
 APPLY = ["enter", "enter"]  # S7 → consent → accept
 
