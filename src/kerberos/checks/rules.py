@@ -90,6 +90,24 @@ def same_asn(data: CheckInput) -> list[Finding]:
     return result
 
 
+@check("host.ru_hoster", "hosting", "medium", None, "manual")
+def ru_hoster(data: CheckInput) -> list[Finding]:
+    """K26: the network of the node is registered in Russia (the CC of whois), while the
+    panel puts the node elsewhere: its hoster answers to Russian law. A finding only where
+    it is so, so the score of other fleets stays; a node the panel puts in Russia (the
+    entry of a cascade) is meant to be there."""
+    if data.asn is None:
+        return []
+    result = []
+    for item in data.nodes:
+        info = data.asn.get(item.ipv4 or "")
+        if info is None or info.country.upper() != "RU" or item.node.country.upper() == "RU":
+            continue
+        result.append(finding("host.ru_hoster", node_target(item.node), False,
+                              {"asn": info.asn, "name": info.name}))  # fmt: skip
+    return result
+
+
 @check("fleet.same_24", "hosting", "medium", None, "manual")
 def same_24(data: CheckInput) -> list[Finding]:
     nets = {}

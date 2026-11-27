@@ -455,6 +455,12 @@ TEXT: dict[str, str] = {
     "check.fleet.same_asn.title": "Ноды одной страны у одного хостера (AS{asn})",
     "check.fleet.same_asn.threat": "Блокировку по AS хостера получат сразу все такие ноды",
     "check.fleet.same_asn.how": "держите резерв у другого хостера",
+    "check.host.ru_hoster.title": "Сеть ноды зарегистрирована в России (AS{asn})",
+    "check.host.ru_hoster.threat": (
+        "Российский хостер подчиняется российским законам: по запросу выдаст данные "
+        "или отключит сервер"
+    ),
+    "check.host.ru_hoster.how": "перенесите ноду к хостеру не из России",
     "check.fleet.same_24.title": "Ноды в одной или соседних подсетях /24 ({net})",
     "check.fleet.same_24.threat": "Блокировка подсети снимет сразу несколько нод",
     "check.fleet.same_24.how": "разнесите ноды по разным подсетям или хостерам",
