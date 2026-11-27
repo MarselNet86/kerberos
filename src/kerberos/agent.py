@@ -37,7 +37,7 @@ import time
 from typing import Any, Callable, Optional
 
 PROTOCOL = 1
-AGENT_VERSION = "0.11.0"
+AGENT_VERSION = "0.12.0"
 AGENT_PATH = "/usr/local/sbin/kerberos-agent"
 STATE_DIR = "/var/lib/kerberos"
 
@@ -46,7 +46,7 @@ ERROR_CODES = frozenset(
     port_busy bridge_network docker_published mptcp_absent port80_busy certbot_failed
     nginx_test_failed realip_enabled apt_failed change_conflict no_backup backup_damaged
     not_implemented command_failed panel_not_peer acme_check_failed acme_standalone
-    certbot_hook""".split()
+    certbot_hook panel_local""".split()
 )
 
 FIX_ID = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
@@ -872,6 +872,9 @@ def collect_facts(system: System) -> dict:
     values = sshd_values(system)
     ssh = collect_ssh(system, values)
     ruleset = Ruleset(system.run(["nft", "-j", "list", "ruleset"]).stdout)
+    # K28: ports of SSH dropped for everybody but a few (ssh.panel_only or a rule of the
+    # person's own): there SSH is not open to the whole internet.
+    ssh["guarded"] = sorted(p for p in ssh["ports"] if p in ruleset.dropped("tcp"))
     ufw_out = system.run(["ufw", "status", "verbose"])
     ufw = parse_ufw(ufw_out.stdout if ufw_out.code != 127 else "")
     published = docker_published(system.run(["docker", "ps", "--format", "{{json .}}"]).stdout)
@@ -1894,6 +1897,41 @@ def fix_node_api(system: System, params: dict) -> Plan:
         f"tcp dport {port} counter drop",
     ], "the node API only for the panel", system)  # fmt: skip
     plan.details = {"port": port, "panelIp": panel}
+    return plan
+
+
+SSH_GUARD = "inet kerberos_ssh"
+
+
+@fix("ssh.panel_only")
+def fix_ssh_panel_only(system: System, params: dict) -> Plan:
+    """K28: SSH of the node answers only the panel server; the person comes in through it
+    (`kerberos ssh`, `ssh -J`) or the console of the hoster. Sessions open now stay."""
+    panel = address_param(system, params)
+    came = plain_ip(panel_address(system))
+    if came and came != plain_ip(panel):
+        # The rule would let in an address KERBEROS does not come from: it cuts itself off.
+        raise AgentError("panel_not_peer", "this session comes from another address")
+    v4, v6 = parse_ip_addr(system.run(["ip", "-j", "addr", "show"]).stdout)
+    if ipaddress.ip_address(panel).is_loopback or plain_ip(panel) in v4 + v6:
+        raise AgentError("panel_local", "the panel server is this node: SSH only from itself")
+    keys = (system.read(AUTHORIZED_KEYS) or "") + "\n" + (system.read(AUTHORIZED_KEYS + "2") or "")
+    if count_admin_keys(keys) == 0:
+        raise AgentError("no_admin_key", "no key of the administrator to come in with")
+    ports = sorted(ssh_ports_in_use(system, system.run(["ss", "-Hlntup"]).stdout))
+    if not ports:
+        raise AgentError("bad_params", "no port of SSH")
+    listed = ", ".join(str(p) for p in ports)
+    family = "ip6" if ":" in panel else "ip"
+    plan = Plan("ssh.panel_only")
+    nft_service(plan, "ssh", SSH_GUARD, [
+        f"tcp dport {{ {listed} }} ct state established,related accept",
+        f'iifname "lo" tcp dport {{ {listed} }} accept',
+        f"tcp dport {{ {listed} }} {family} saddr {panel} counter accept",
+        f"tcp dport {{ {listed} }} counter drop",
+    ], "SSH only from the panel server", system)  # fmt: skip
+    plan.access = True
+    plan.details = {"ports": ports, "panelIp": panel}
     return plan
 
 
