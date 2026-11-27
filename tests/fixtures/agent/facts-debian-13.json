@@ -147,6 +147,7 @@
   },
   "ssh": {
     "adminKeys": 1,
+    "guarded": [],
     "kbdInteractive": false,
     "passwordAuthentication": false,
     "permitRootLogin": "without-password",

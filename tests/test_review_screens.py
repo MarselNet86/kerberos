@@ -232,7 +232,7 @@ def test_a_marks_everything_but_the_ssh_port_and_takes_it_back():
     marked, cleared = int(notes[1].group(1)), int(notes[2].group(1))
     assert cleared == 0, "the second press takes back what the first marked"
     in_groups = [i for i in items if i.fix_id != "self_steal" and not i.blocked]
-    ports = [i for i in in_groups if i.fix_id == "ssh.port"]
+    ports = [i for i in in_groups if i.fix_id in ("ssh.port", "ssh.panel_only")]
     waiting = [i for i in in_groups if i.fix_id == "cdn.edge_only"]
     assert marked == len(in_groups) - len(ports) - len(waiting)
     assert not any(i.selected for i in items if i.fix_id == "self_steal"), "they wait for a domain"

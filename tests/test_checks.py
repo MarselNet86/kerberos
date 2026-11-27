@@ -25,7 +25,7 @@ SECTION_10_2 = {
     "client.ping_type", "node.icmp", "xhttp.padding", "xhttp.uplink_get", "xhttp.post_size",
     "xhttp.extra_outer", "host.fingerprint", "dpi.fragment", "dpi.mtu", "sub.ru_direct",
     "sub.probe_interval", "exit.ru_traffic", "reserve.missing", "reserve.same_asn",
-    "node.blocked", "watch.missing",
+    "node.blocked", "watch.missing", "ssh.open",
 }  # fmt: skip
 XUI_ONLY = {"xui.panel_exposed", "xui.panel_tls", "xui.panel_2fa"}  # §7.6, test_xui_model.py
 # K17: findings only on nodes with renewals on :80 or the site of KERBEROS; the demo fleet has
@@ -231,6 +231,7 @@ FIXERS = {
     "reserve.same_asn": fix_asn,
     "node.blocked": fix_blocked,
     "watch.missing": lambda d: fix_facts(d, lambda f: f.update(watch={"installed": True})),
+    "ssh.open": lambda d: fix_facts(d, lambda f: f["ssh"].update(guarded=f["ssh"]["ports"])),
 }  # fmt: skip
 
 

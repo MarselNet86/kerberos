@@ -105,7 +105,8 @@ def test_a_skips_the_filter_and_enter_asks_for_nets():
     # The CDN filter waits for its nets, `a` leaves the four SSH ports; the four own
     # domains are a block of their own (K23).
     in_groups = [i for i in app.session.data["plan"] if i.fix_id != "self_steal"]
-    assert seen(term, t("plan.block.auto.note", n=len(in_groups) - 5, total=len(in_groups)))
+    left = [i for i in in_groups if i.fix_id in ("ssh.port", "ssh.panel_only", "cdn.edge_only")]
+    assert seen(term, t("plan.block.auto.note", n=len(in_groups) - len(left), total=len(in_groups)))
     app2, term2, _code, _p, _n = run_fix(on("fi-1", "cdn.edge_only", "space") + ["enter"] + LEAVE)
     assert seen(term2, t("plan.need_edges"))
     assert not [cmd for _a, cmd in app2.env.transport.log if cmd.startswith("apply")]
