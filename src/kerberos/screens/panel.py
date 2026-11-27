@@ -43,15 +43,6 @@ def keys_field() -> tuple:
     return (("Enter", t("keys.next")), ("Esc", t("keys.back")))
 
 
-def keys_next() -> tuple:
-    return (
-        ("Enter", t("keys.next")),
-        ("Esc", t("keys.back")),
-        ("m", t("keys.mask")),
-        ("q", t("keys.quit")),
-    )
-
-
 UNREACHABLE = {"remnawave": "panel.err.unreachable", "3x-ui": "panel.xui.err.unreachable"}
 
 
@@ -319,10 +310,11 @@ def register_sensitive(app: App, snapshot: PanelSnapshot) -> None:
 PANELS = ("remnawave", "3x-ui")
 
 
-def choose_panel(app: App) -> Any:
+def choose_panel(app: App, ask: bool = False) -> Any:
     """§6 S2, §7.6: which panel runs here, Remnawave or 3x-ui; the one found is first.
 
-    (kind, location or None) or BACK. `--panel` answers without asking.
+    (kind, location or None) or BACK. `--panel` answers without asking, and so does a
+    server where only one panel was found (K25), unless `ask`.
     """
     app.draw(t("s2.title"), Text(t("panel.searching")))
     host = app.env.host
@@ -333,6 +325,9 @@ def choose_panel(app: App) -> Any:
     wanted = getattr(app.env, "panel_kind", None)
     if wanted in PANELS:
         return wanted, found[wanted]
+    present = [kind for kind in PANELS if found[kind] is not None]
+    if len(present) == 1 and not ask:
+        return present[0], found[present[0]]
     items = []
     for kind in PANELS:
         location = found[kind]
@@ -363,14 +358,22 @@ def open_panel(app: App, kind: Optional[str] = None, write: bool = True) -> Any:
     `write`: the run changes the panel, so the token needs write rights too (§7.3).
     """
     if kind is None:
-        chosen = choose_panel(app)
-        if chosen == BACK:
-            return BACK
-        kind, location = chosen
-    else:
-        host = app.env.host
-        finder = discover_xui if kind == "3x-ui" else discover
-        location = finder(host) if host is not None else None
+        ask = False
+        while True:
+            chosen = choose_panel(app, ask)
+            if chosen == BACK:
+                return BACK
+            opened = sign_in_to(app, *chosen, write)
+            if opened != BACK or getattr(app.env, "panel_kind", None) in PANELS:
+                return opened
+            ask = True  # Esc on the token: the choice the person did not see (K25)
+    host = app.env.host
+    finder = discover_xui if kind == "3x-ui" else discover
+    location = finder(host) if host is not None else None
+    return sign_in_to(app, kind, location, write)
+
+
+def sign_in_to(app: App, kind: str, location: Optional[PanelLocation], write: bool) -> Any:
     if kind == "3x-ui":
         return open_xui(app, location)
     if location is None:
@@ -538,42 +541,40 @@ def load_xui(app: App, client: Any, location: PanelLocation) -> Optional[PanelSn
                 return None
 
 
-def step(app: App, session: Session) -> Any:
-    if session.snapshot is None:
-        write = session.mode != "check"
-        opened = open_panel(app, write=write)
-        if not isinstance(opened, tuple):
-            return opened
-        location, client = opened
-        if location.kind == "3x-ui":
-            snapshot = load_xui(app, client, location)
-        else:
-            snapshot = load(app, client, location, write)
-        if snapshot is None:
-            return EXIT_PANEL
-        register_sensitive(app, snapshot)
-        session.location, session.panel, session.snapshot = location, client, snapshot
-
+def panel_line(app: App, session: Session) -> list[RenderableType]:
+    """«✓ Панель подключена: …» over S3 (on 3x-ui over S4): S2 does not stop for it (K25)."""
     location, snapshot = session.location, session.snapshot
+    if location is None or snapshot is None:
+        return []
+    if location.kind == "3x-ui":
+        line = Text(f"✓ {t('panel.xui.ok', inbounds=len(snapshot.hosts))}", style="ok")
+        name = "3x-ui"
+    else:
+        line = Text(f"✓ {t('panel.ok', nodes=len(snapshot.nodes), hosts=len(snapshot.hosts))}",
+                    style="ok")  # fmt: skip
+        name = "Remnawave"
+    extra = [name + ("" if location.version == "?" else f" {location.version}")]
+    if getattr(session.panel, "token_source", "") == "saved":
+        extra.append(t("panel.token.used"))
+    line.append(" · " + " · ".join(extra), style="muted")
+    return [line]
 
-    def body(_w: int, _h: int) -> RenderableType:
-        if location.kind == "3x-ui":
-            inbounds = len(snapshot.hosts)
-            ok = Text(f"✓ {t('panel.xui.ok', inbounds=inbounds)}", style="ok")
-            return Group(*xui_lines(app, location), Text(""), ok)
-        ok = Text(
-            f"✓ {t('panel.ok', nodes=len(snapshot.nodes), hosts=len(snapshot.hosts))}", style="ok"
-        )
-        lines = [*found_lines(app, location), Text(""), ok]
-        if getattr(session.panel, "token_source", "") == "saved":
-            lines.append(Text(t("panel.token.used"), style="muted"))
-        return Group(*lines)
 
-    def handle(key: str) -> Optional[str]:
-        if key == "enter":
-            return NEXT
-        if key == "esc":
-            return BACK
-        return None
-
-    return app.interact(t("s2.title"), body, keys_next(), handle)
+def step(app: App, session: Session) -> Any:
+    if session.snapshot is not None:
+        # Back from S3 (on 3x-ui from S4): S2 has no screen of its own to stop at.
+        return BACK
+    write = session.mode != "check"
+    opened = open_panel(app, write=write)
+    if not isinstance(opened, tuple):
+        return opened
+    location, client = opened
+    if location.kind == "3x-ui":
+        snapshot = load_xui(app, client, location)
+    else:
+        snapshot = load(app, client, location, write)
+    if snapshot is None:
+        return EXIT_PANEL
+    register_sensitive(app, snapshot)
+    session.location, session.panel, session.snapshot = location, client, snapshot
+    return NEXT
