@@ -595,6 +595,28 @@ def xui_panel_2fa(data: CheckInput) -> list[Finding]:
                     {"twoFactor": bool(info.get("twoFactor"))})]  # fmt: skip
 
 
+@check("xui.sub_ru_direct", "routing", "medium", None, "manual", panels=("3x-ui",))
+def xui_sub_ru_direct(data: CheckInput) -> list[Finding]:
+    """K29: the subscription of 3x-ui sends Russian sites through the server. From v3.0 the
+    panel hands Happ a routing profile; before, only the JSON subscription takes rules.
+    A profile at a URL KERBEROS cannot read is the person's own business: no finding."""
+    from kerberos.fixes import xui_routing
+
+    routing = (data.snapshot.panel_info or {}).get("routing")
+    if not routing:
+        return []
+    if routing["happ"]:
+        profile = xui_routing.parse_routing(routing["rules"]) if routing["enabled"] else None
+        if profile == xui_routing.REMOTE:
+            return []
+        ok = isinstance(profile, dict) and xui_routing.profile_ru_direct(profile)
+        evidence = {} if ok else {"routing": xui_routing.routing_link()}
+    else:
+        ok = routing["json"] and xui_routing.json_rules_ru_direct(routing["jsonRules"])
+        evidence = {"version": "2"}
+    return [finding("xui.sub_ru_direct", "panel", ok, evidence)]
+
+
 @check("panel_server.ssh", "scanning", "high", None, "manual", panels=REMNAWAVE)
 def panel_server_ssh(data: CheckInput) -> list[Finding]:
     if data.panel_ssh is None:
