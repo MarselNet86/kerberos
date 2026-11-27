@@ -280,8 +280,16 @@ def parse_ss_connections(text: str) -> list:
             local, port = split_host_port(parts[2])
             # A dual-stack socket (Xray's «*:443») shows IPv4 clients as ::ffff:198.51.100.7.
             peer, local = plain_ip(peer), plain_ip(local)
-            current = {"peer": peer, "local": local, "port": port, "received": 0, "lastrcv": 0,
-                       "acked": 0, "unacked": 0, "lastack": 0}
+            current = {
+                "peer": peer,
+                "local": local,
+                "port": port,
+                "received": 0,
+                "lastrcv": 0,
+                "acked": 0,
+                "unacked": 0,
+                "lastack": 0,
+            }
             connections.append(current)
     return connections
 
