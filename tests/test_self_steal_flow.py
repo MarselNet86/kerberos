@@ -8,6 +8,7 @@ from kerberos.checks import spec
 from kerberos.copy import t
 from kerberos.demo.fleet import build_nodes, build_panel
 from kerberos.fixes.finalize import due_items, unattended
+from kerberos.fixes.hosts import FINGERPRINTS
 from kerberos.fixes.journal import RunStore
 from kerberos.fixes.profile import server_names
 from kerberos.flow import EXIT_OK, EXIT_PARTIAL, EXIT_ROLLBACK_FAILED
@@ -71,7 +72,7 @@ def test_self_steal_moves_the_node_to_its_domain():
     assert any(hy2["uuid"] in [i["uuid"] for i in s["inbounds"]] for s in panel.squads)
     created = [h for h in panel.hosts if h["uuid"] not in hosts_before]
     assert {h["sni"] for h in created} == {"nl-1.example.com"}
-    assert all(not h["isDisabled"] and h["fingerprint"] == "firefox" for h in created)
+    assert all(not h["isDisabled"] and h["fingerprint"] in FINGERPRINTS for h in created)
     old = next(h for h in panel.hosts if h["remark"] == "NL Reality" and h["uuid"] in hosts_before)
     assert old["isDisabled"] is True
     log = [

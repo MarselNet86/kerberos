@@ -22,6 +22,7 @@ from kerberos.clock import FakeClock
 from kerberos.copy import t
 from kerberos.demo.fleet import attach, build_nodes, build_panel
 from kerberos.demo.nodes import auth_methods_of, build_prober
+from kerberos.fixes.hosts import FINGERPRINTS
 from kerberos.fixes.journal import RunStore
 from kerberos.fixes.own_profile import NAME_RE, flag, profile_name
 from kerberos.fixes.panel_changes import undo_squads
@@ -282,7 +283,7 @@ def test_a_node_without_hosts_gets_a_reality_and_a_hysteria_host():
     single = next(tpl["uuid"] for tpl in panel.templates if tpl["name"] == "KERBEROS single")
     for host in created:
         assert host["address"] == "203.0.113.10" and host["port"] == 443
-        assert host["sni"] == "nl-1.example.com" and host["fingerprint"] == "firefox"
+        assert host["sni"] == "nl-1.example.com" and host["fingerprint"] in FINGERPRINTS
         assert host["xrayJsonTemplateUuid"] == single and not host["isDisabled"]
 
 

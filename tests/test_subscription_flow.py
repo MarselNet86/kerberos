@@ -8,6 +8,7 @@ from kerberos.checks.rules import probe_interval, ru_direct
 from kerberos.copy import t
 from kerberos.demo.fleet import build_nodes, build_panel
 from kerberos.fixes import subscription
+from kerberos.fixes.hosts import fingerprint_of
 from kerberos.fixes.journal import RunStore
 from kerberos.fixes.profile import remaining
 from kerberos.flow import EXIT_OK
@@ -101,7 +102,7 @@ def test_fingerprint_of_one_host():
     keys = on("host", "host.fingerprint", "space") + APPLY
     app, term, code, panel, _nodes = run_fix(keys)
     host = next(h for h in panel.hosts if h["remark"] == "NL Reality")
-    assert host["fingerprint"] == "firefox"
+    assert host["fingerprint"] == fingerprint_of(host["uuid"])
     app.env.terminal.feed(*ROLLBACK)
     app.run("rollback")
     assert next(h for h in panel.hosts if h["remark"] == "NL Reality")["fingerprint"] == ""

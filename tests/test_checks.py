@@ -34,6 +34,9 @@ RENEWALS = {"acme.port80", "acme.stop_hook"}
 # K24: a finding only on a node whose profile was deleted; the demo fleet has none, so its
 # score stays. Covered in test_own_profile.py.
 PROFILELESS = {"node.no_profile"}
+# K26: a finding only on a node whose network is registered in Russia; the demo fleet has
+# none, so its score stays. Covered in test_no_common_signature.py.
+RU_HOSTER = {"host.ru_hoster"}
 
 
 @pytest.fixture(scope="module")
@@ -47,7 +50,8 @@ def results(data, check_id):
 
 def test_registry_is_section_10_2():
     run_checks(demo_input()[1])  # registers the rules
-    assert {item.check_id for item in REGISTRY} == SECTION_10_2 | XUI_ONLY | RENEWALS | PROFILELESS
+    others = XUI_ONLY | RENEWALS | PROFILELESS | RU_HOSTER
+    assert {item.check_id for item in REGISTRY} == SECTION_10_2 | others
 
 
 @pytest.mark.parametrize("check_id", sorted(SECTION_10_2))

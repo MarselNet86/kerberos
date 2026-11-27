@@ -6,7 +6,7 @@ import random
 from hypothesis import given
 from hypothesis import strategies as st
 
-from kerberos.fixes.hosts import CHANGED, copy_fields, hysteria_host, mismatches
+from kerberos.fixes.hosts import CHANGED, copy_fields, fingerprint_of, hysteria_host, mismatches
 from kerberos.fixes.profile import (
     build_profile,
     finalize_profile,
@@ -179,7 +179,7 @@ def test_copy_differs_only_in_the_fields_of_10_4(raw):
     changed = {k for k in set(raw) | set(copy_) if raw.get(k) != copy_.get(k)}
     assert changed <= CHANGED | {"uuid", "viewPosition"}
     assert copy_["sni"] == DOMAIN and copy_["overrideSniFromAddress"] is False
-    assert copy_["fingerprint"] == (raw["fingerprint"] or "firefox")
+    assert copy_["fingerprint"] == (raw["fingerprint"] or fingerprint_of(raw["uuid"]))
     assert "uuid" not in copy_ and "viewPosition" not in copy_
 
 
