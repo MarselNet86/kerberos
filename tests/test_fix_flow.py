@@ -1,7 +1,7 @@
 """«Исправление» end to end on the demo fleet (tech.md §6 S7-S9, §11, K4)."""
 
 import pytest
-from helpers import login_keys, make_app, plan_rows, seen
+from helpers import S4_KEYS, login_keys, make_app, plan_rows, seen
 from test_review_screens import short_state
 
 from kerberos.copy import t
@@ -11,8 +11,8 @@ from kerberos.flow import EXIT_INTERRUPTED, EXIT_OK, EXIT_PARTIAL, EXIT_ROLLBACK
 
 # S2 login, S2 → S3 → S4; S4: five host keys (de-1 also installs python3), kz-1 skipped;
 # admin key: «Мои ключи» and the checklist; S4 summary; whois yes; S6 → S7.
-TO_PLAN = login_keys() + ["enter", "enter"] + ["enter"] * 5 + ["esc"] + ["enter", "enter"]
-TO_PLAN += ["enter", "enter", "enter"]
+TO_PLAN = login_keys() + ["enter"] + S4_KEYS + ["enter", "enter"]  # S3, S4, admin key
+TO_PLAN += ["enter", "enter", "enter"]  # S4 summary, whois, S6 → S7
 APPLY = ["enter", "enter"]  # S7 → consent → accept
 # Marked by default on the demo fleet: nl-1: 7, nl-2: 3, de-1: 1, fi-1: 3 on the nodes, then
 # sub.template, sub.ping_type, xhttp.padding (fi-1) and xhttp.uplink_get («FI CDN») in the

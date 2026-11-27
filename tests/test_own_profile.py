@@ -11,7 +11,7 @@ import json
 
 import pytest
 from demo_input import demo_snapshot, grant_access
-from helpers import flat, login_keys, make_app, seen
+from helpers import S4_KEYS, flat, login_keys, make_app, seen
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -32,8 +32,8 @@ from kerberos.mask import Masker
 from kerberos.panel.fake import new_uuid
 from kerberos.screens.fix import plan_rows as layout
 
-TO_PLAN = login_keys() + ["enter", "enter"] + ["enter"] * 5 + ["esc"] + ["enter", "enter"]
-TO_PLAN += ["enter", "enter", "enter"]
+TO_PLAN = login_keys() + ["enter"] + S4_KEYS + ["enter", "enter"]  # S3, S4, admin key
+TO_PLAN += ["enter", "enter", "enter"]  # S4 summary, whois, S6 → S7
 APPLY = ["enter", "enter", "enter"]  # S7 → consent → accept → S9 Enter
 ROLLBACK = ["enter", "enter", "enter"] + list("admin") + ["enter"] + list("pw") + ["enter", "x"]
 

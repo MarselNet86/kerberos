@@ -9,7 +9,7 @@ import json
 from urllib.parse import urlsplit
 
 import pytest
-from helpers import login_keys, make_app, on
+from helpers import S4_KEYS, login_keys, make_app, on
 
 from kerberos.demo.fleet import build_nodes, build_panel
 from kerberos.fixes.engine import ROLLBACKABLE
@@ -19,8 +19,8 @@ from kerberos.nodes import fake_fixes
 from kerberos.nodes.keys import PublicKey, demo_blob, fingerprint
 from kerberos.nodes.transport import NodeAgentError, TransportError
 
-TO_PLAN = login_keys() + ["enter", "enter"] + ["enter"] * 5 + ["esc"] + ["enter", "enter"]
-TO_PLAN += ["enter", "enter", "enter"]
+TO_PLAN = login_keys() + ["enter"] + S4_KEYS + ["enter", "enter"]  # S3, S4, admin key
+TO_PLAN += ["enter", "enter", "enter"]  # S4 summary, whois, S6 → S7
 APPLY = ["enter", "enter"]  # S7 → consent → accept
 DONE = ["enter"]  # S9
 # The run, all its changes, consent, the panel login; the result notice comes after.

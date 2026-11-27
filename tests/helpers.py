@@ -59,6 +59,11 @@ def typed(text: str) -> list[str]:
 TOKEN = "rw-test-token"  # the demo panel takes any API token (§7.3)
 
 
+# S4 of the demo fleet (K25): kz-1 shows no SSH on port 22 (Esc on its port), one table
+# confirms the four other host keys (Enter), de-1 has no python3 (Enter installs it).
+S4_KEYS = ["esc", "enter", "enter"]
+
+
 def login_keys(token: str = TOKEN) -> list[str]:
     """S2 with no saved token: the API token typed in, then Enter."""
     return typed(token) + ["enter"]

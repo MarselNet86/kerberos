@@ -17,10 +17,10 @@ from kerberos.panel.xui_fake import FakeXui, raw_inbound
 
 CHOOSE = ["down", "enter"]  # S2: 3x-ui is the second panel of the demo server
 LOGIN = typed("admin") + ["enter"] + typed("pw") + ["enter"]
-TO_REPORT = CHOOSE + LOGIN + ["enter", "enter"]  # S2 summary, S4 summary (S3 is skipped)
+TO_REPORT = CHOOSE + LOGIN + ["enter"]  # S4 summary: S2 does not stop (K25), S3 is skipped
 TO_PLAN = TO_REPORT + ["enter"]
 # «Проверка»: S4 first says what it installs on this server.
-CHECK_REPORT = CHOOSE + LOGIN + ["enter", "enter", "enter"]
+CHECK_REPORT = CHOOSE + LOGIN + ["enter", "enter"]
 # S7 rows of the demo server (K23), groups folded: the access to the server, the new SSH
 # port, the holes for scanners, the panel, watch; then its own domain, the last row.
 TO_PORT, TO_STEAL = ["home", "down"], ["end"]
@@ -75,7 +75,7 @@ def test_local_access_needs_no_password_and_is_restricted():
     assert record.ssh_address == "127.0.0.1" and record.address == XUI_IP
     assert app.env.state.pinned("127.0.0.1", 22) == node.host_key.blob
     assert ("127.0.0.1", "open_root") not in app.env.transport.log, "no password, no ssh -tt"
-    assert not seen(term, t("access.hostkey", node="panel", fingerprint="")[:12])
+    assert not seen(term, t("access.hostkeys")), "no host key question on this server"
 
 
 def test_fix_moves_reality_to_the_own_domain():

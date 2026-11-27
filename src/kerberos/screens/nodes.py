@@ -14,6 +14,7 @@ from rich.text import Text
 from kerberos.copy import t
 from kerberos.flow import BACK, NEXT
 from kerberos.panel.model import Inbound, Node, PanelSnapshot
+from kerberos.screens.panel import panel_line
 from kerberos.ui.widgets import Checklist, Notice
 
 if TYPE_CHECKING:
@@ -113,7 +114,7 @@ def step(app: App, session: Session) -> Any:
 
     def body(_w: int, height: int) -> RenderableType:
         checklist.rows = rows()
-        head = [Text(t("nodes.title"), style="bold")]
+        head = [*panel_line(app, session), Text(t("nodes.title"), style="bold")]
         tail: list[RenderableType] = [
             Text(t("nodes.selected", n=len(checklist.selected), total=len(nodes)), style="muted")
         ]

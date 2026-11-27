@@ -4,7 +4,7 @@ import json
 import re
 import stat
 
-from helpers import assert_snapshot, login_keys, make_app, seen
+from helpers import S4_KEYS, assert_snapshot, login_keys, make_app, seen
 from test_review_screens import short_state
 
 from kerberos.__main__ import Options, print_report
@@ -15,7 +15,7 @@ from kerberos.report import markdown
 from kerberos.screens.check import write_report
 
 # S2 summary, S3, the intro of «Проверка» on S4, five host keys, kz-1 skipped, S4 summary.
-TO_S5 = login_keys() + ["enter", "enter", "enter"] + ["enter"] * 5 + ["esc"] + ["enter"]
+TO_S5 = login_keys() + ["enter"] + S4_KEYS + ["enter"]  # S3, S4 with its summary
 WHOIS_YES = ["enter"]
 READ_ONLY = {"version", "facts", "watch", "site-check", "edge-sources"}
 

@@ -3,7 +3,7 @@
 import random
 
 from demo_input import demo_input
-from helpers import flat, login_keys, make_app, on, seen
+from helpers import S4_KEYS, flat, login_keys, make_app, on, seen
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -13,8 +13,8 @@ from kerberos.copy import t
 from kerberos.fixes.journal import RunStore
 from kerberos.fixes.plan import build_plan, free_site_seed
 
-TO_PLAN = login_keys() + ["enter", "enter"] + ["enter"] * 5 + ["esc"] + ["enter", "enter"]
-TO_PLAN += ["enter", "enter", "enter"]
+TO_PLAN = login_keys() + ["enter"] + S4_KEYS + ["enter", "enter"]  # S3, S4, admin key
+TO_PLAN += ["enter", "enter", "enter"]  # S4 summary, whois, S6 → S7
 MINE = {"mode": "mine", "keys": ["ssh-ed25519 AAAA admin@laptop"]}
 
 

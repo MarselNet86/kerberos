@@ -19,7 +19,6 @@ TEXT: dict[str, str] = {
     "panel.token": "API-токен панели",
     "panel.ok": "Панель подключена: нод {nodes}, хостов {hosts}",
     "nodes.title": "Какие ноды защищать?",
-    "access.hostkey": "Ключ сервера {node}: {fingerprint}. Это ваш сервер?",
     "access.password": "Введите пароль root для {node}. KERBEROS его не видит и не сохраняет",
     "access.admin_keys": "Чтобы вы не потеряли вход, добавим ваш ключ на ноды",
     "access.no_admin_key": (
@@ -351,8 +350,6 @@ TEXT: dict[str, str] = {
     "access.port_label": "Порт SSH для {node}",
     "access.port_hint": "К порту {port} подключиться не удалось. Укажите порт SSH этой ноды.",
     "access.port_invalid": "нужен номер порта от 1 до 65535",
-    "access.yes": "Да, это мой сервер",
-    "access.no": "Нет, пропустить ноду",
     "access.skip": "Пропустить ноду",
     # The command stands on a line of its own: a wrap inside it would break a copy.
     "access.hostkey_hint": (
@@ -416,9 +413,22 @@ TEXT: dict[str, str] = {
     "access.admin.later": (
         "Ключи попадут на ноды только после вашего разрешения на экране согласия."
     ),
-    "access.admin.chosen.mine": "Ключ администратора: ваши ключи с сервера панели",
-    "access.admin.chosen.create": "Ключ администратора: KERBEROS создаст его на сервере панели",
-    "access.admin.chosen.skip": "Ключ администратора: пропущен, вход по паролю на нодах останется",
+    "access.answer.admin.mine": "Ключ администратора: ваши ключи ({n}) · k — выбрать заново",
+    "access.answer.admin.create": (
+        "Ключ администратора: ключ на сервере панели · k — выбрать заново"
+    ),
+    "access.answer.admin.skip": (
+        "Ключ администратора: пропущен, вход по паролю на нодах останется · k — выбрать"
+    ),
+    "access.answer.whois.yes": "Хостеры нод (whois): узнавать · w — не узнавать",
+    "access.answer.whois.no": "Хостеры нод (whois): не узнавать · w — узнавать",
+    "access.hostkeys": "Ключи серверов: отметьте свои.",
+    "access.hostkeys.selected": "Отмечено {n} из {total}",
+    "access.hostkeys.confirm": "подтвердить отмеченные",
+    "access.scanning_keys": "Снимаю ключи {n:сервера|серверов|серверов}…",
+    "access.col.fingerprint.sha256": "Отпечаток SHA256",
+    "keys.admin_key": "ключ администратора",
+    "keys.whois": "whois",
     "ssh.unknown_node": "Нода {node} не найдена: сначала дайте KERBEROS доступ к ней",
     "ssh.no_admin_key": (
         "Ключа администратора на сервере панели нет. Его создаёт «Исправление», "
@@ -1107,6 +1117,10 @@ TEXT: dict[str, str] = {
         "случайный порт вместо 22; старый закроется только после входа на новый"
     ),
     "plan.domain.enter": "d: ввести домен",
+    "plan.domain.from.last": "домен из прошлого запуска",
+    "plan.domain.from.node": "из адреса ноды в панели",
+    "plan.domain.from.host": "из адреса хоста «{host}» в панели",
+    "plan.domain.found": "Домен {domain} подставлен сам: {where}. d — другой домен",
     "plan.domain.record": "A-запись: {record}",
     "plan.domain.no_reserve": "без резерва",
     "plan.domain.blocked": "недоступно",

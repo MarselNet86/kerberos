@@ -98,10 +98,17 @@ def step_collect(app: App, session: Session) -> Any:
     whois = False
     candidates = [n for n in session.snapshot.nodes if n.uuid in session.selected]
     if len(candidates) >= 2:
-        answer = ask_whois(app, session)
-        if answer is None:
-            return BACK
-        whois = answer
+        # Asked once (K25): the answer is kept, `w` on the summary of S4 changes it.
+        state = app.env.state
+        remembered = state.answers().get("whois") if state is not None else None
+        if remembered is None:
+            answer = ask_whois(app, session)
+            if answer is None:
+                return BACK
+            if state is not None:
+                state.remember(whois=answer)
+            remembered = answer
+        whois = remembered
     session.data["records"] = app.env.state.nodes() if app.env.state else {}
     progress, box_ = collect_in_background(
         app.env, session.snapshot, session.selected, session.data.get("access", {}), whois
@@ -251,7 +258,7 @@ def to_fix(app: App, session: Session) -> Any:
     if session.snapshot.kind == "3x-ui":
         session.data.setdefault("admin", {"mode": "local", "keys": []})
     elif "admin" not in session.data:
-        session.data["admin"] = AccessScreen(app, session).ask_admin()
+        session.data["admin"] = AccessScreen(app, session).admin_answer()
     session.mode = "fix"
     session.data.pop("run", None)
     save_check_run(app, session)

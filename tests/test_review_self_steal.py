@@ -35,7 +35,7 @@ from kerberos.panel.fake import FakePanel, raw_host
 from kerberos.panel.xui_fake import raw_inbound
 
 X_TO_REPORT = ["down", "enter"] + typed("admin") + ["enter"] + typed("pw") + ["enter"]
-X_TO_REPORT += ["enter", "enter"]
+X_TO_REPORT += ["enter"]  # S4 summary: S2 does not stop (K25)
 X_TO_PLAN = X_TO_REPORT + ["enter"]
 X_STEAL = ["end", "d"] + list(XUI_DOMAIN) + ["enter"]  # its own domain: the last row of S7
 

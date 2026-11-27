@@ -2,7 +2,7 @@
 
 import json
 
-from helpers import login_keys, make_app, on, seen
+from helpers import S4_KEYS, login_keys, make_app, on, seen
 
 from kerberos.checks import spec
 from kerberos.copy import t
@@ -12,8 +12,8 @@ from kerberos.fixes.journal import RunStore
 from kerberos.fixes.profile import server_names
 from kerberos.flow import EXIT_OK, EXIT_PARTIAL, EXIT_ROLLBACK_FAILED
 
-TO_PLAN = login_keys() + ["enter", "enter"] + ["enter"] * 5 + ["esc"] + ["enter", "enter"]
-TO_PLAN += ["enter", "enter", "enter"]
+TO_PLAN = login_keys() + ["enter"] + S4_KEYS + ["enter", "enter"]  # S3, S4, admin key
+TO_PLAN += ["enter", "enter", "enter"]  # S4 summary, whois, S6 → S7
 NL1_SELF_STEAL, NL2_SELF_STEAL = "nl-1", "nl-2"  # rows of the block «Свой домен» (K23)
 
 
@@ -226,7 +226,7 @@ def test_unattended_finalization_with_the_saved_token():
     panel, nodes = fleet()
     host = build_host()
     host.on(["systemd-run"], CommandResult(0))  # the timer is set
-    keys = TO_PLAN + domain_keys(NL1_SELF_STEAL, "nl-1.example.com") + ["f"] + APPLY
+    keys = TO_PLAN + domain_keys(NL1_SELF_STEAL, "nl-1.example.com") + APPLY
     app, term = make_app(keys, panel=panel, nodes=list(nodes.values()), height=46, host=host)
     app.run("fix")
     store = store_of(app)
@@ -247,7 +247,7 @@ def test_unattended_finalization_without_a_saved_token_waits_for_the_person():
     panel, nodes = fleet()
     host = build_host()
     host.on(["systemd-run"], CommandResult(0))
-    keys = TO_PLAN + domain_keys(NL1_SELF_STEAL, "nl-1.example.com") + ["f"] + APPLY
+    keys = TO_PLAN + domain_keys(NL1_SELF_STEAL, "nl-1.example.com") + APPLY
     app, _term = make_app(keys, panel=panel, nodes=list(nodes.values()), height=46, host=host)
     app.run("fix")
     store = store_of(app)

@@ -2,7 +2,7 @@
 a run, the SSH transport and S4 picking the node address."""
 
 import pytest
-from helpers import login_keys, make_app, on, seen, typed
+from helpers import S4_KEYS, login_keys, make_app, on, seen, typed
 
 from kerberos.copy import t
 from kerberos.demo.fleet import build_nodes
@@ -11,8 +11,8 @@ from kerberos.flow import EXIT_OK, EXIT_ROLLBACK_FAILED
 from kerberos.nodes.transport import NodeAgentError
 
 # Same keys as tests/test_fix_flow.py and tests/test_ssh_port_flow.py.
-TO_PLAN = login_keys() + ["enter", "enter"] + ["enter"] * 5 + ["esc"] + ["enter", "enter"]
-TO_PLAN += ["enter", "enter", "enter"]
+TO_PLAN = login_keys() + ["enter"] + S4_KEYS + ["enter", "enter"]  # S3, S4, admin key
+TO_PLAN += ["enter", "enter", "enter"]  # S4 summary, whois, S6 → S7
 DEFAULT_APPLY = ["enter", "enter", "enter"]  # S7 → consent → accept, S9
 
 
@@ -163,7 +163,7 @@ def test_old_port_closed_at_the_hoster_keeps_the_new_port():
 
 # 3x-ui (§7.6): KERBEROS reaches this server on 127.0.0.1 and cannot see the hoster's firewall.
 XUI_LOGIN = typed("admin") + ["enter"] + typed("pw") + ["enter"]
-XUI_PLAN = ["down", "enter"] + XUI_LOGIN + ["enter", "enter", "enter"]
+XUI_PLAN = ["down", "enter"] + XUI_LOGIN + ["enter", "enter"]  # S4 summary, S6 → S7
 XUI_PORT = ["home", "down"]  # the group «Новый порт SSH» of S7 (K23)
 
 
@@ -233,8 +233,8 @@ def test_xui_port_whose_recheck_fails_is_tried_on_the_old_port_from_outside(answ
 
 # -- 5. a node given by name is reached on its IPv4 (§8.2) ----------------------------------
 NL1_NAME = "nl-1.example.com"
-TO_S4 = login_keys() + ["enter", "enter"]
-HOST_KEYS = ["enter", "enter", "enter", "enter", "enter", "esc"]  # see tests/test_s4.py
+TO_S4 = login_keys() + ["enter"]  # S3: S2 does not stop (K25)
+HOST_KEYS = S4_KEYS  # see tests/test_s4.py
 
 
 def check_by_name(nodes, state=None, extra=HOST_KEYS):
@@ -242,7 +242,8 @@ def check_by_name(nodes, state=None, extra=HOST_KEYS):
 
     panel = build_panel()
     next(n for n in panel.nodes if n["name"] == "nl-1")["address"] = NL1_NAME
-    keys = TO_S4 + ["enter"] + extra + ["enter", "x", "q", "enter"]  # S4 intro of «Проверка»
+    start = ["enter"] if state is not None else TO_S4  # a later run: the saved token
+    keys = start + list(extra) + ["enter", "x", "q", "enter"]  # extra, S4 summary, out
     app, term = make_app(keys, nodes=nodes, state=state, panel=panel)
     app.env.prober.dns[NL1_NAME] = ["2001:db8::10", NL1]  # A and AAAA
     app.run("check")
@@ -284,7 +285,7 @@ def test_node_set_up_by_name_before_moves_to_its_ipv4_without_questions():
     assert state.find_node("nl-1").ssh_address == NL1
     assert state.pinned(NL1, 22) == blob
     assert app.env.transport.interactive_logins == 0
-    question = t("access.hostkey", node="nl-1", fingerprint="@").split("@")[0].strip()
+    question = t("access.hostkeys")
     assert seen(check_by_name(build_nodes())[1], question), "the question looks like this"
     assert not seen(term, question)
 
