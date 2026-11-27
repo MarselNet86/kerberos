@@ -860,11 +860,13 @@ def reserve_same_asn(data: CheckInput) -> list[Finding]:
 MIN_WATCH_CONNECTIONS = 20
 
 
-def cut_share(watch: Optional[dict]) -> Optional[float]:
+def cut_share(watch: Optional[dict], key: str = "cut") -> Optional[float]:
+    """The share of connections with a sign of the watch: `cut` (silent within 1.5 KB) or
+    `stalled` (frozen after ~16 KB, K27; agents before 0.11 send none: 0)."""
     if not watch:
         return None
     total = sum((watch.get(f) or {}).get("connections", 0) for f in ("v4", "v6"))
-    cut = sum((watch.get(f) or {}).get("cut", 0) for f in ("v4", "v6"))
+    cut = sum((watch.get(f) or {}).get(key, 0) or 0 for f in ("v4", "v6"))
     return cut / total if total >= MIN_WATCH_CONNECTIONS else None
 
 
@@ -878,13 +880,16 @@ def node_blocked(data: CheckInput) -> list[Finding]:
         reserve_users = sum(r.users_online for r in reserves)
         by_users = item.node.users_online == 0 and reserve_users > 0
         share = cut_share(item.watch)
+        stall = cut_share(item.watch, "stalled")
         by_cut = share is not None and share > 0.05
+        by_stall = stall is not None and stall > 0.05
         if not reserves and share is None:
             continue
         evidence = {"usersOnline": item.node.users_online, "reserveUsers": reserve_users,
-                    "cutShare": round(share, 3) if share is not None else None}  # fmt: skip
-        result.append(finding("node.blocked", node_target(item.node), not (by_users or by_cut),
-                              evidence))  # fmt: skip
+                    "cutShare": round(share, 3) if share is not None else None,
+                    "stallShare": round(stall, 3) if stall is not None else None}  # fmt: skip
+        blocked = by_users or by_cut or by_stall
+        result.append(finding("node.blocked", node_target(item.node), not blocked, evidence))
     return result
 
 
