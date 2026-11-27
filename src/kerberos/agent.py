@@ -37,7 +37,7 @@ import time
 from typing import Any, Callable, Optional
 
 PROTOCOL = 1
-AGENT_VERSION = "0.10.2"
+AGENT_VERSION = "0.11.0"
 AGENT_PATH = "/usr/local/sbin/kerberos-agent"
 STATE_DIR = "/var/lib/kerberos"
 
@@ -252,8 +252,15 @@ def parse_ss_listen(text: str) -> list:
     return sockets
 
 
+def ss_number(line: str, name: str) -> int:
+    match = re.search(rf"\b{name}:(\d+)", line)
+    return int(match.group(1)) if match else 0
+
+
 def parse_ss_connections(text: str) -> list:
-    """`ss -Htin state established`: peer, bytes received, ms since the last receive."""
+    """`ss -Htin state established`: peer, bytes received, ms since the last receive; and
+    for the sign of K27 bytes the client acknowledged, segments still in flight and ms
+    since its last ACK."""
     connections = []
     current: Optional[dict] = None
     for line in (text or "").splitlines():
@@ -261,10 +268,11 @@ def parse_ss_connections(text: str) -> list:
             continue
         if line[0] in " \t":
             if current is not None:
-                received = re.search(r"\bbytes_received:(\d+)", line)
-                last = re.search(r"\blastrcv:(\d+)", line)
-                current["received"] = int(received.group(1)) if received else 0
-                current["lastrcv"] = int(last.group(1)) if last else 0
+                current["received"] = ss_number(line, "bytes_received")
+                current["lastrcv"] = ss_number(line, "lastrcv")
+                current["acked"] = ss_number(line, "bytes_acked")
+                current["unacked"] = ss_number(line, "unacked")
+                current["lastack"] = ss_number(line, "lastack")
             continue
         parts = line.split()
         if len(parts) >= 4:
@@ -272,7 +280,8 @@ def parse_ss_connections(text: str) -> list:
             local, port = split_host_port(parts[2])
             # A dual-stack socket (Xray's «*:443») shows IPv4 clients as ::ffff:198.51.100.7.
             peer, local = plain_ip(peer), plain_ip(local)
-            current = {"peer": peer, "local": local, "port": port, "received": 0, "lastrcv": 0}
+            current = {"peer": peer, "local": local, "port": port, "received": 0, "lastrcv": 0,
+                       "acked": 0, "unacked": 0, "lastack": 0}
             connections.append(current)
     return connections
 
@@ -676,17 +685,38 @@ def net_of(address: str, v4_prefix: int, v6_prefix: int) -> str:
     return str(ipaddress.ip_network(f"{address}/{prefix}", strict=False))
 
 
-def watch_family(connections: list) -> dict:
-    cut = [c for c in connections if c["received"] <= 1500 and c["lastrcv"] > 3000]
+# K27: TSPU lets a connection through for its first ~16 KB and then drops what the server
+# sends: the client acknowledged about that much and nothing since, while data is still in
+# flight. An idle connection has nothing unacknowledged; a client that went away mid-download
+# usually got far more than this.
+STALL_ACKED = (10_240, 24_576)
+STALL_MS = 3000
+
+
+def stalled(item: dict) -> bool:
+    low, high = STALL_ACKED
+    acked = item.get("acked", 0)
+    return low <= acked <= high and item.get("unacked", 0) > 0 and item.get("lastack", 0) > STALL_MS
+
+
+def nets_of(connections: list) -> list:
     nets: dict = {}
-    for item in cut:
+    for item in connections:
         net = net_of(item["peer"], 16, 32)
         nets[net] = nets.get(net, 0) + 1
+    return [{"net": n, "count": c} for n, c in sorted(nets.items(), key=lambda x: -x[1])]
+
+
+def watch_family(connections: list) -> dict:
+    cut = [c for c in connections if c["received"] <= 1500 and c["lastrcv"] > 3000]
+    stuck = [c for c in connections if stalled(c)]
     return {
         "connections": len(connections),
         "clientIps": len({c["peer"] for c in connections}),
         "cut": len(cut),
-        "cutNets": [{"net": n, "count": c} for n, c in sorted(nets.items(), key=lambda x: -x[1])],
+        "cutNets": nets_of(cut),
+        "stalled": len(stuck),
+        "stalledNets": nets_of(stuck),
     }
 
 
@@ -3693,13 +3723,14 @@ LOADER.exec_module(AGENT)
 WATCH = AGENT.collect_watch(AGENT.System())
 V4, V6, XRAY = WATCH["v4"], WATCH["v6"], WATCH["xray"]
 NETS = ",".join("%s:%s" % (n["net"], n["count"]) for n in V4["cutNets"] + V6["cutNets"])
-LINE = "%s port=%s conn=%d ips=%d cut=%d nets=%s users5m=%s req5m=%s\\n" % (
+LINE = "%s port=%s conn=%d ips=%d cut=%d nets=%s stall=%d users5m=%s req5m=%s\\n" % (
     WATCH["at"],
     ",".join(str(p) for p in WATCH["ports"]) or "-",
     V4["connections"] + V6["connections"],
     V4["clientIps"] + V6["clientIps"],
     V4["cut"] + V6["cut"],
     NETS or "-",
+    V4["stalled"] + V6["stalled"],
     XRAY["users5m"],
     XRAY["accepted5m"],
 )
